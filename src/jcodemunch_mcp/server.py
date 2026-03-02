@@ -1,9 +1,10 @@
 """MCP server for jcodemunch-mcp."""
 
+import argparse
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, Optional
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent
@@ -360,8 +361,13 @@ async def run_server():
         )
 
 
-def main():
+def main(argv: Optional[list[str]] = None):
     """Main entry point."""
+    parser = argparse.ArgumentParser(
+        prog="jcodemunch-mcp",
+        description="Run the jCodeMunch MCP stdio server.",
+    )
+    parser.parse_args(argv)
     asyncio.run(run_server())
 
 
