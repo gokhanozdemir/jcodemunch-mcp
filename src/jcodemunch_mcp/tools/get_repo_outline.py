@@ -5,7 +5,7 @@ import time
 from collections import Counter
 from typing import Optional
 
-from ..storage import IndexStore
+from ..storage import IndexStore, record_savings, estimate_savings
 
 
 def get_repo_outline(
@@ -57,6 +57,17 @@ def get_repo_outline(
     for sym in index.symbols:
         kind_counts[sym.get("kind", "unknown")] += 1
 
+    # Token savings: sum of all raw file sizes (user would need to read all files)
+    raw_bytes = 0
+    content_dir = store._content_dir(owner, name)
+    for f in index.source_files:
+        try:
+            raw_bytes += os.path.getsize(content_dir / f)
+        except OSError:
+            pass
+    tokens_saved = estimate_savings(raw_bytes, 0)
+    total_saved = record_savings(tokens_saved)
+
     elapsed = (time.perf_counter() - start) * 1000
 
     return {
@@ -69,5 +80,7 @@ def get_repo_outline(
         "symbol_kinds": dict(kind_counts.most_common()),
         "_meta": {
             "timing_ms": round(elapsed, 1),
+            "tokens_saved": tokens_saved,
+            "total_tokens_saved": total_saved,
         },
     }

@@ -1,10 +1,11 @@
 """Get symbol source code."""
 
 import hashlib
+import os
 import time
 from typing import Optional
 
-from ..storage import IndexStore
+from ..storage import IndexStore, record_savings, estimate_savings
 
 
 def _make_meta(timing_ms: float, **kwargs) -> dict:
@@ -93,6 +94,18 @@ def get_symbol(
         stored_hash = symbol.get("content_hash", "")
         meta["content_verified"] = actual_hash == stored_hash if stored_hash else None
 
+    # Token savings: raw file size vs symbol byte length
+    raw_bytes = 0
+    try:
+        raw_file = store._content_dir(owner, name) / symbol["file"]
+        raw_bytes = os.path.getsize(raw_file)
+    except OSError:
+        pass
+    tokens_saved = estimate_savings(raw_bytes, symbol.get("byte_length", 0))
+    total_saved = record_savings(tokens_saved)
+    meta["tokens_saved"] = tokens_saved
+    meta["total_tokens_saved"] = total_saved
+
     elapsed = (time.perf_counter() - start) * 1000
 
     result = {
@@ -172,10 +185,30 @@ def get_symbols(
             "source": source or ""
         })
 
+    # Token savings: unique file sizes vs sum of symbol byte_lengths
+    raw_bytes = 0
+    seen_files: set = set()
+    response_bytes = 0
+    for symbol_id in symbol_ids:
+        symbol = index.get_symbol(symbol_id)
+        if not symbol:
+            continue
+        f = symbol["file"]
+        if f not in seen_files:
+            seen_files.add(f)
+            try:
+                raw_bytes += os.path.getsize(store._content_dir(owner, name) / f)
+            except OSError:
+                pass
+        response_bytes += symbol.get("byte_length", 0)
+    tokens_saved = estimate_savings(raw_bytes, response_bytes)
+    total_saved = record_savings(tokens_saved)
+
     elapsed = (time.perf_counter() - start) * 1000
 
     return {
         "symbols": symbols,
         "errors": errors,
-        "_meta": _make_meta(elapsed, symbol_count=len(symbols)),
+        "_meta": _make_meta(elapsed, symbol_count=len(symbols),
+                            tokens_saved=tokens_saved, total_tokens_saved=total_saved),
     }

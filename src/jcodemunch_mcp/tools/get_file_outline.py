@@ -1,9 +1,10 @@
 """Get file outline - symbols in a specific file."""
 
+import os
 import time
 from typing import Optional
 
-from ..storage import IndexStore
+from ..storage import IndexStore, record_savings, estimate_savings
 from ..parser import build_symbol_tree
 
 
@@ -66,6 +67,17 @@ def get_file_outline(
     
     elapsed = (time.perf_counter() - start) * 1000
 
+    # Token savings: raw file size vs outline response size
+    raw_bytes = 0
+    try:
+        raw_file = store._content_dir(owner, name) / file_path
+        raw_bytes = os.path.getsize(raw_file)
+    except OSError:
+        pass
+    response_bytes = sum(s.get("byte_length", 0) for s in file_symbols)
+    tokens_saved = estimate_savings(raw_bytes, response_bytes)
+    total_saved = record_savings(tokens_saved)
+
     return {
         "repo": f"{owner}/{name}",
         "file": file_path,
@@ -74,6 +86,8 @@ def get_file_outline(
         "_meta": {
             "timing_ms": round(elapsed, 1),
             "symbol_count": len(symbols_output),
+            "tokens_saved": tokens_saved,
+            "total_tokens_saved": total_saved,
         },
     }
 
