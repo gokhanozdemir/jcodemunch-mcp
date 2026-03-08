@@ -108,6 +108,21 @@ def is_secret_file(file_path: str) -> bool:
 
 # --- Binary File Detection ---
 
+# Shared skip patterns used by both index_folder and index_repo.
+# Keep a single source of truth here.
+SKIP_PATTERNS: frozenset[str] = frozenset({
+    "node_modules/", "vendor/", "venv/", ".venv/", "__pycache__/",
+    "dist/", "build/", ".git/", ".tox/", ".mypy_cache/",
+    "target/",
+    ".gradle/",
+    "test_data/", "testdata/", "fixtures/", "snapshots/",
+    "migrations/",
+    ".min.js", ".min.ts", ".bundle.js",
+    "package-lock.json", "yarn.lock", "go.sum",
+    "generated/", "proto/",
+    "*.xcodeproj/", "*.xcworkspace/", "DerivedData/", ".build/",
+})
+
 BINARY_EXTENSIONS = frozenset([
     # Executables
     ".exe", ".dll", ".so", ".dylib", ".bin", ".out",
@@ -333,19 +348,3 @@ def should_exclude_file(
         return "binary_extension"
 
     return None
-
-
-# Shared skip patterns used by both index_folder and index_repo.
-# Keep a single source of truth here.
-SKIP_PATTERNS = [
-    "node_modules/", "vendor/", "venv/", ".venv/", "__pycache__/",
-    "dist/", "build/", ".git/", ".tox/", ".mypy_cache/",
-    "target/",
-    ".gradle/",
-    "test_data/", "testdata/", "fixtures/", "snapshots/",
-    "migrations/",
-    ".min.js", ".min.ts", ".bundle.js",
-    "package-lock.json", "yarn.lock", "go.sum",
-    "generated/", "proto/",
-    "*.xcodeproj/", "*.xcworkspace/", "DerivedData/", ".build/",
-]
