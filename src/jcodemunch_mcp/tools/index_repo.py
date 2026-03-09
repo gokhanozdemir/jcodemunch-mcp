@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import time
 from collections import defaultdict
 from typing import Optional
 from urllib.parse import urlparse
@@ -281,8 +282,9 @@ async def index_repo(
 
     warnings = []
     max_files = get_max_index_files()
-    
+
     try:
+        t0 = time.monotonic()
         # Fetch tree
         try:
             tree_entries = await fetch_repo_tree(owner, repo, github_token)
@@ -360,6 +362,7 @@ async def index_repo(
                     "message": "No changes detected",
                     "repo": f"{owner}/{repo}",
                     "changed": 0, "new": 0, "deleted": 0,
+                    "duration_seconds": round(time.monotonic() - t0, 2),
                 }
 
             files_to_parse = set(changed) | set(new)
@@ -409,6 +412,7 @@ async def index_repo(
                 "changed": len(changed), "new": len(new), "deleted": len(deleted),
                 "symbol_count": len(updated.symbols) if updated else 0,
                 "indexed_at": updated.indexed_at if updated else "",
+                "duration_seconds": round(time.monotonic() - t0, 2),
                 "no_symbols_count": len(incremental_no_symbols),
                 "no_symbols_files": incremental_no_symbols[:50],
             }
@@ -486,6 +490,7 @@ async def index_repo(
             "file_summary_count": sum(1 for v in file_summaries.values() if v),
             "languages": languages,
             "files": source_file_list[:20],  # Limit files in response
+            "duration_seconds": round(time.monotonic() - t0, 2),
             "no_symbols_count": len(no_symbols_files),
             "no_symbols_files": no_symbols_files[:50],
         }

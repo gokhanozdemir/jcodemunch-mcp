@@ -47,7 +47,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="index_repo",
-            description="Index a GitHub repository's source code. Fetches files, parses ASTs, extracts symbols, and saves to local storage.",
+            description="Index a GitHub repository's source code. Fetches files, parses ASTs, extracts symbols, and saves to local storage. Set JCODEMUNCH_USE_AI_SUMMARIES=false to disable AI summaries globally.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -76,7 +76,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="index_folder",
-            description="Index a local folder containing source code. Response includes `discovery_skip_counts` (files filtered per reason), `no_symbols_count`/`no_symbols_files` (files with no extractable symbols) for diagnosing missing files.",
+            description="Index a local folder containing source code. Response includes `discovery_skip_counts` (files filtered per reason), `no_symbols_count`/`no_symbols_files` (files with no extractable symbols) for diagnosing missing files. Set JCODEMUNCH_USE_AI_SUMMARIES=false to disable AI summaries globally.",
             inputSchema={
                 "type": "object",
                 "properties": {

@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import os
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
@@ -332,6 +333,7 @@ def index_folder(
     max_files = get_max_folder_files()
 
     try:
+        t0 = time.monotonic()
         # Discover source files (with security filtering)
         source_files, discover_warnings, skip_counts = discover_local_files(
             folder_path,
@@ -394,6 +396,7 @@ def index_folder(
                     "repo": f"{owner}/{repo_name}",
                     "folder_path": str(folder_path),
                     "changed": 0, "new": 0, "deleted": 0,
+                    "duration_seconds": round(time.monotonic() - t0, 2),
                 }
 
             # Parse only changed + new files
@@ -456,6 +459,7 @@ def index_folder(
                 "changed": len(changed), "new": len(new), "deleted": len(deleted),
                 "symbol_count": len(updated.symbols) if updated else 0,
                 "indexed_at": updated.indexed_at if updated else "",
+                "duration_seconds": round(time.monotonic() - t0, 2),
                 "discovery_skip_counts": skip_counts,
                 "no_symbols_count": len(incremental_no_symbols),
                 "no_symbols_files": incremental_no_symbols[:50],
@@ -538,6 +542,7 @@ def index_folder(
             "file_summary_count": sum(1 for v in file_summaries.values() if v),
             "languages": languages,
             "files": source_file_list[:20],  # Limit files in response
+            "duration_seconds": round(time.monotonic() - t0, 2),
             "discovery_skip_counts": skip_counts,
             "no_symbols_count": len(no_symbols_files),
             "no_symbols_files": no_symbols_files[:50],  # Show up to 50 for inspection

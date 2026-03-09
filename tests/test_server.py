@@ -2,6 +2,7 @@
 
 import pytest
 import json
+import threading
 from unittest.mock import AsyncMock, patch
 
 from jcodemunch_mcp.server import server, list_tools, call_tool
@@ -129,6 +130,28 @@ async def test_call_tool_forwards_search_text_context_lines():
         max_results=20,
         context_lines=3,
         storage_path=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_index_folder_dispatched_via_to_thread():
+    """index_folder must run in a thread-pool thread, not on the event loop thread.
+
+    This guards against regressions where the sync call_tool branch accidentally
+    awaits index_folder directly, which would block the asyncio event loop.
+    """
+    thread_used = []
+
+    def recording_index_folder(**kwargs):
+        thread_used.append(threading.current_thread())
+        return {"success": True}
+
+    with patch("jcodemunch_mcp.server.index_folder", recording_index_folder):
+        await call_tool("index_folder", {"path": "/tmp/project"})
+
+    assert thread_used, "index_folder was never called"
+    assert thread_used[0] is not threading.main_thread(), (
+        "index_folder ran on the main thread — asyncio.to_thread dispatch is broken"
     )
 
 

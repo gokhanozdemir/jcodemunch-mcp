@@ -2,6 +2,13 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.2.4] - 2026-03-08
+
+### Added
+- `duration_seconds` field in all `index_folder` and `index_repo` result dicts (full, incremental, and no-changes paths) — total wall-clock time rounded to 2 decimal places
+- `JCODEMUNCH_USE_AI_SUMMARIES` env var now mentioned in `index_folder` and `index_repo` MCP tool descriptions for discoverability
+- Integration test verifying `index_folder` is dispatched via `asyncio.to_thread` (guards against event-loop blocking regressions)
+
 ## [1.0.0] - 2026-03-07
 
 First stable release. The MCP tool interface, index schema (v3), and symbol
