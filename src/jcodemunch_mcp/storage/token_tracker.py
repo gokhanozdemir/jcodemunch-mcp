@@ -10,8 +10,14 @@ Community meter: token savings are shared anonymously by default to the
 global counter at https://j.gravelle.us. Only {"delta": N, "anon_id":
 "<uuid>"} is sent — never code, paths, repo names, or anything identifying.
 Set JCODEMUNCH_SHARE_SAVINGS=0 to disable.
+
+Performance: uses an in-memory accumulator to avoid disk read+write on every
+tool call. Flushes to disk every FLUSH_INTERVAL calls (default 10) and at
+process exit via atexit. Telemetry batches are sent at flush time rather than
+per-call to avoid spawning a new thread on every tool use.
 """
 
+import atexit
 import json
 import os
 import threading
@@ -22,6 +28,7 @@ from typing import Optional
 _SAVINGS_FILE = "_savings.json"
 _BYTES_PER_TOKEN = 4  # ~4 bytes per token (rough but consistent)
 _TELEMETRY_URL = "https://j.gravelle.us/APIs/savings/post.php"
+_FLUSH_INTERVAL = 10  # flush to disk every N calls
 
 # Input token pricing ($ per token). Update as models reprice.
 PRICING = {
@@ -30,17 +37,103 @@ PRICING = {
 }
 
 
+# ---------------------------------------------------------------------------
+# In-memory state (process-lifetime cache)
+# ---------------------------------------------------------------------------
+
+class _State:
+    """Holds the in-memory accumulator for the current process."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._loaded = False
+        self._total: int = 0          # cumulative total (disk + in-flight)
+        self._unflushed: int = 0      # delta not yet written to disk
+        self._call_count: int = 0     # calls since last flush
+        self._anon_id: Optional[str] = None
+        self._base_path: Optional[str] = None
+        self._pending_telemetry: int = 0  # unflushed delta for telemetry
+
+    def _ensure_loaded(self, base_path: Optional[str]) -> None:
+        """Load persisted total from disk (once per process)."""
+        if self._loaded:
+            return
+        self._base_path = base_path
+        path = _savings_path(base_path)
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except Exception:
+            data = {}
+        self._total = data.get("total_tokens_saved", 0)
+        self._anon_id = data.get("anon_id")
+        self._loaded = True
+
+    def add(self, delta: int, base_path: Optional[str]) -> int:
+        """Add delta to the running total. Returns new cumulative total."""
+        with self._lock:
+            self._ensure_loaded(base_path)
+            delta = max(0, delta)
+            self._total += delta
+            self._unflushed += delta
+            self._pending_telemetry += delta
+            self._call_count += 1
+            if self._call_count >= _FLUSH_INTERVAL:
+                self._flush_locked()
+            return self._total
+
+    def get_total(self, base_path: Optional[str]) -> int:
+        with self._lock:
+            self._ensure_loaded(base_path)
+            return self._total
+
+    def _flush_locked(self) -> None:
+        """Write accumulated total to disk. Must be called with _lock held."""
+        if self._unflushed == 0 and self._loaded:
+            self._call_count = 0
+            return
+        path = _savings_path(self._base_path)
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except Exception:
+            data = {}
+        if self._anon_id is None:
+            if "anon_id" not in data:
+                data["anon_id"] = str(uuid.uuid4())
+            self._anon_id = data["anon_id"]
+        else:
+            data["anon_id"] = self._anon_id
+        data["total_tokens_saved"] = self._total
+        try:
+            path.write_text(json.dumps(data))
+        except Exception:
+            pass
+
+        # Send batched telemetry
+        if self._pending_telemetry > 0 and os.environ.get("JCODEMUNCH_SHARE_SAVINGS", "1") != "0":
+            _share_savings(self._pending_telemetry, self._anon_id)
+            self._pending_telemetry = 0
+
+        self._unflushed = 0
+        self._call_count = 0
+
+    def flush(self) -> None:
+        """Public flush — called at atexit."""
+        with self._lock:
+            if self._loaded:
+                self._flush_locked()
+
+
+_state = _State()
+atexit.register(_state.flush)
+
+
+# ---------------------------------------------------------------------------
+# Public API (unchanged signatures)
+# ---------------------------------------------------------------------------
+
 def _savings_path(base_path: Optional[str] = None) -> Path:
     root = Path(base_path) if base_path else Path.home() / ".code-index"
     root.mkdir(parents=True, exist_ok=True)
     return root / _SAVINGS_FILE
-
-
-def _get_or_create_anon_id(data: dict) -> str:
-    """Return the persistent anonymous install ID, creating it if absent."""
-    if "anon_id" not in data:
-        data["anon_id"] = str(uuid.uuid4())
-    return data["anon_id"]
 
 
 def _share_savings(delta: int, anon_id: str) -> None:
@@ -60,36 +153,16 @@ def _share_savings(delta: int, anon_id: str) -> None:
 
 
 def record_savings(tokens_saved: int, base_path: Optional[str] = None) -> int:
-    """Add tokens_saved to the running total. Returns new cumulative total."""
-    path = _savings_path(base_path)
-    try:
-        data = json.loads(path.read_text()) if path.exists() else {}
-    except Exception:
-        data = {}
+    """Add tokens_saved to the running total. Returns new cumulative total.
 
-    delta = max(0, tokens_saved)
-    total = data.get("total_tokens_saved", 0) + delta
-    data["total_tokens_saved"] = total
-
-    if delta > 0 and os.environ.get("JCODEMUNCH_SHARE_SAVINGS", "1") != "0":
-        anon_id = _get_or_create_anon_id(data)
-        _share_savings(delta, anon_id)
-
-    try:
-        path.write_text(json.dumps(data))
-    except Exception:
-        pass
-
-    return total
+    Uses an in-memory accumulator; flushes to disk every 10 calls and at exit.
+    """
+    return _state.add(tokens_saved, base_path)
 
 
 def get_total_saved(base_path: Optional[str] = None) -> int:
     """Return the current cumulative total without modifying it."""
-    path = _savings_path(base_path)
-    try:
-        return json.loads(path.read_text()).get("total_tokens_saved", 0)
-    except Exception:
-        return 0
+    return _state.get_total(base_path)
 
 
 def estimate_savings(raw_bytes: int, response_bytes: int) -> int:
