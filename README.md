@@ -400,6 +400,34 @@ See CONTEXT_PROVIDERS.md for the full architecture, dbt details, and guide to wr
 
 ---
 
+## Context Providers
+
+When indexing local folders, jCodeMunch automatically detects ecosystem tools and enriches the index with **business context** — descriptions, tags, and metadata from project configuration files.
+
+| Provider | Detects           | Enriches With                                        |
+| -------- | ----------------- | ---------------------------------------------------- |
+| dbt      | `dbt_project.yml` | Model descriptions, tags, column names/descriptions  |
+
+Context enrichment is **automatic** — no configuration needed. When a provider detects its tool, it injects metadata into AI summarization prompts, file summaries, and search keywords.
+
+Example: a dbt model with a `schema.yml` description produces file summaries like:
+
+```
+This table summarizes account ledger. Tags: nightly, agg, intraday. 70 properties
+```
+
+Instead of the default:
+
+```
+Contains 2 functions: source, renamed
+```
+
+The provider system is extensible — adding support for Terraform, OpenAPI, Django, or any other tool requires implementing a single `ContextProvider` class.
+
+See CONTEXT_PROVIDERS.md for the full architecture, dbt details, and guide to writing new providers.
+
+---
+
 ## Security
 
 Built-in protections:
@@ -479,6 +507,7 @@ For **LM Studio**, ensure the Local Server is running (usually on port 1234):
 | `CODE_INDEX_PATH`           | Custom cache path         | No       |
 | `JCODEMUNCH_MAX_INDEX_FILES`| Maximum files to index per repo/folder (default: `10000`) | No |
 | `JCODEMUNCH_CONTEXT_PROVIDERS` | Set to `0` to disable context providers (dbt, etc.) during indexing | No |
+| `JCODEMUNCH_CONTEXT_PROVIDERS` | Set to `0` to disable context providers (dbt, etc.) during indexing | No |
 | `JCODEMUNCH_SHARE_SAVINGS`  | Set to `0` to disable anonymous community token savings reporting | No       |
 | `JCODEMUNCH_LOG_LEVEL`      | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`) | No       |
 | `JCODEMUNCH_LOG_FILE`       | Path to log file. If unset, logs go to stderr. Use a file to avoid polluting MCP stdio. | No       |
@@ -498,6 +527,7 @@ To disable, set `JCODEMUNCH_SHARE_SAVINGS=0` in your MCP server env.
 - SPEC.md
 - SECURITY.md
 - LANGUAGE_SUPPORT.md
+- CONTEXT_PROVIDERS.md
 - CONTEXT_PROVIDERS.md
 
 ---
