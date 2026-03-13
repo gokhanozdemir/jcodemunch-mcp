@@ -136,6 +136,13 @@ LANGUAGE_EXTENSIONS = {
     # XML / XUL
     ".xml": "xml",
     ".xul": "xml",
+    # OpenAPI / Swagger (compound extensions; basenames handled in get_language_for_path)
+    ".openapi.yaml": "openapi",
+    ".openapi.yml": "openapi",
+    ".openapi.json": "openapi",
+    ".swagger.yaml": "openapi",
+    ".swagger.yml": "openapi",
+    ".swagger.json": "openapi",
 }
 
 
@@ -1219,6 +1226,25 @@ XML_SPEC = LanguageSpec(
 )
 
 
+# OpenAPI / Swagger specification
+# NOTE: Parsed by _parse_openapi_symbols() in extractor.py using yaml/json.
+# File detection uses compound extensions (.openapi.yaml, .swagger.json, …)
+# plus well-known basenames (openapi.yaml, swagger.json) handled in
+# get_language_for_path(). ts_language is unused — extraction is dict-based.
+OPENAPI_SPEC = LanguageSpec(
+    ts_language="yaml",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
 # Language registry
 LANGUAGE_REGISTRY = {
     "python": PYTHON_SPEC,
@@ -1264,9 +1290,16 @@ LANGUAGE_REGISTRY = {
     "graphql": GRAPHQL_SPEC,
     "autohotkey": AHK_SPEC,
     "xml": XML_SPEC,
+    "openapi": OPENAPI_SPEC,
 }
 
 logger = logging.getLogger(__name__)
+
+# Well-known OpenAPI/Swagger basenames (no compound extension, just the filename)
+_OPENAPI_BASENAMES = frozenset({
+    "openapi.yaml", "openapi.yml", "openapi.json",
+    "swagger.yaml", "swagger.yml", "swagger.json",
+})
 
 
 def _apply_extra_extensions() -> None:
@@ -1299,17 +1332,23 @@ _apply_extra_extensions()
 def get_language_for_path(path: str) -> "Optional[str]":
     """Return the language name for a file path, handling compound extensions.
 
-    Checks compound suffixes (e.g. ``.blade.php``) before falling back to the
-    last extension (e.g. ``.php``).  This ensures Blade templates are not
-    mis-classified as plain PHP.
+    Check order:
+    1. Well-known OpenAPI/Swagger basenames (openapi.yaml, swagger.json, …).
+    2. Compound suffixes (e.g. ``.blade.php``, ``.openapi.yaml``).
+    3. Last extension (e.g. ``.php``).
     """
     import os as _os
     lower = path.lower()
     base = _os.path.basename(lower)
+    # 1. Basename match for OpenAPI sentinel files
+    if base in _OPENAPI_BASENAMES:
+        return "openapi"
+    # 2. Compound extension (e.g. ".blade.php", ".openapi.yaml")
     first_dot = base.find(".")
     if first_dot != -1:
-        compound = base[first_dot:]  # e.g. ".blade.php"
+        compound = base[first_dot:]
         if compound in LANGUAGE_EXTENSIONS:
             return LANGUAGE_EXTENSIONS[compound]
+    # 3. Simple extension
     _, ext = _os.path.splitext(lower)
     return LANGUAGE_EXTENSIONS.get(ext)

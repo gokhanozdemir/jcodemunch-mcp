@@ -55,19 +55,26 @@ from jcodemunch_mcp.tools.get_symbol import get_symbol
 # Config
 # ---------------------------------------------------------------------------
 
-DEFAULT_REPOS = [
-    "expressjs/express",
-    "fastapi/fastapi",
-    "gin-gonic/gin",
-]
+# ---------------------------------------------------------------------------
+# Task corpus — loaded from benchmarks/tasks.json if present, else hardcoded
+# ---------------------------------------------------------------------------
 
-TASKS = [
-    "router route handler",
-    "middleware",
-    "error exception",
-    "request response",
-    "context bind",
-]
+_CORPUS_PATH = _REPO_ROOT / "benchmarks" / "tasks.json"
+
+def _load_corpus():
+    if _CORPUS_PATH.exists():
+        import json as _json
+        corpus = _json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))
+        repos = [r["id"] for r in corpus.get("repos", [])]
+        tasks = [t["query"] for t in corpus.get("tasks", [])]
+        return repos, tasks
+    # Fallback hardcoded values (kept in sync with tasks.json)
+    return (
+        ["expressjs/express", "fastapi/fastapi", "gin-gonic/gin"],
+        ["router route handler", "middleware", "error exception", "request response", "context bind"],
+    )
+
+DEFAULT_REPOS, TASKS = _load_corpus()
 
 SEARCH_MAX_RESULTS = 5
 SYMBOLS_FETCHED = 3        # get_symbol calls per query in the jMunch workflow

@@ -64,6 +64,8 @@ def parse_file(content: str, filename: str, language: str) -> list[Symbol]:
         symbols = _parse_autohotkey_symbols(source_bytes, filename)
     elif language == "xml":
         symbols = _parse_xml_symbols(source_bytes, filename)
+    elif language == "openapi":
+        symbols = _parse_openapi_symbols(source_bytes, filename)
     else:
         spec = LANGUAGE_REGISTRY[language]
         symbols = _parse_with_spec(source_bytes, filename, language, spec)
@@ -4217,6 +4219,8 @@ def _parse_autohotkey_symbols(source_bytes: bytes, filename: str) -> list[Symbol
     - Top-level functions:  ``FuncName(params) {`` or ``FuncName(params) => expr``
     - Classes:              ``class ClassName [extends Base] {``
     - Methods:              indented ``[static] MethodName(params) {`` inside a class
+    - Hotkeys:              ``F1::action``, ``#n::{ ... }``, ``^!Del::`` etc.
+    - #HotIf directives:   ``#HotIf WinActive(...)`` / ``#HotIf`` (reset)
 
     Only declarations whose opening ``{`` (or fat-arrow ``=>``) appears on the
     same line are recognised; next-line-brace style is not supported for
@@ -4238,6 +4242,16 @@ def _parse_autohotkey_symbols(source_bytes: bytes, filename: str) -> list[Symbol
     # [static] FuncName(params) { or => (declaration, not a bare call)
     FUNC_RE = re.compile(
         r'^(\s*)(static\s+)?([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:=>|\{)',
+        re.IGNORECASE,
+    )
+    # Hotkey: Key:: or Key::Action (at top level, not indented inside a class)
+    # Matches modifier combos like #n::, ^!Del::, F1::, ~RButton::RunScript()
+    HOTKEY_RE = re.compile(
+        r'^([~*$!^#+<>*&\w]+::(?:[^{;\s][^;]*?)?)\s*(?:;.*)?$',
+    )
+    # #HotIf [expression]
+    HOTIF_RE = re.compile(
+        r'^#HotIf(?:\s+(.+?))?\s*(?:;.*)?$',
         re.IGNORECASE,
     )
     _KEYWORDS = frozenset({
@@ -4294,6 +4308,52 @@ def _parse_autohotkey_symbols(source_bytes: bytes, filename: str) -> list[Symbol
         # Pop classes whose body we have left
         while class_stack and depth < class_stack[-1][1]:
             class_stack.pop()
+
+        # ── #HotIf directive ──────────────────────────────────────────────
+        hif = HOTIF_RE.match(stripped)
+        if hif:
+            expr = (hif.group(1) or "").strip()
+            # "#HotIf" alone resets the context; still worth indexing as a marker
+            name = f"#HotIf {expr}" if expr else "#HotIf"
+            sig = name
+            sym = Symbol(
+                id=make_symbol_id(filename, name, "constant"),
+                file=filename,
+                name=name,
+                qualified_name=name,
+                kind="constant",
+                language="autohotkey",
+                signature=sig,
+                line=line_no,
+                end_line=line_no,
+            )
+            symbols.append(sym)
+            continue
+
+        # ── Hotkey definition ─────────────────────────────────────────────
+        # Only index at top level (depth == 0, no current class context)
+        if not class_stack and depth == 0:
+            hk = HOTKEY_RE.match(stripped)
+            if hk:
+                hotkey_def = hk.group(1)
+                # Split into trigger and (optional) single-line action
+                parts = hotkey_def.split("::", 1)
+                trigger = parts[0]
+                action = parts[1].strip() if len(parts) > 1 and parts[1].strip() else ""
+                sig = f"{trigger}::{action}" if action else f"{trigger}::"
+                sym = Symbol(
+                    id=make_symbol_id(filename, sig, "constant"),
+                    file=filename,
+                    name=trigger,
+                    qualified_name=sig,
+                    kind="constant",
+                    language="autohotkey",
+                    signature=sig,
+                    line=line_no,
+                    end_line=line_no,
+                )
+                symbols.append(sym)
+                continue
 
         # ── Function / method declaration ─────────────────────────────────
         fm = FUNC_RE.match(stripped)
@@ -4542,4 +4602,133 @@ def _parse_xml_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
             _walk(child)
 
     _walk(tree.root_node)
+    return symbols
+
+
+def _parse_openapi_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Parse OpenAPI/Swagger spec and extract path operations and schemas as symbols.
+
+    Extracts:
+    - Path operations (GET /users, POST /users/{id}, ...) -> function symbols
+    - Component schemas (v3) / definitions (v2)           -> type symbols
+
+    Requires pyyaml for YAML files; JSON files use the stdlib json module.
+    Returns [] gracefully if parsing fails or pyyaml is not installed.
+    """
+    source = source_bytes.decode("utf-8", errors="replace")
+    is_json = filename.lower().endswith(".json")
+    symbols: list[Symbol] = []
+
+    # Parse structured data
+    data: object = None
+    if is_json:
+        try:
+            import json as _json
+            data = _json.loads(source)
+        except Exception:
+            return symbols
+    else:
+        try:
+            import yaml as _yaml  # optional dep; degrades gracefully
+            data = _yaml.safe_load(source)
+        except Exception:
+            return symbols
+
+    if not isinstance(data, dict):
+        return symbols
+
+    # Verify this is actually an OpenAPI/Swagger document
+    if "openapi" not in data and "swagger" not in data and "paths" not in data:
+        return symbols
+
+    # Pre-compute per-line byte offsets for accurate line->byte mapping
+    lines = source.splitlines(keepends=True)
+    offsets = [0]
+    for ln in lines:
+        offsets.append(offsets[-1] + len(ln.encode("utf-8")))
+
+    def _find_line(text: str, after: int = 0) -> int:
+        t = text.lower()
+        for i in range(after, len(lines)):
+            if t in lines[i].lower():
+                return i + 1
+        return max(after + 1, 1)
+
+    def _byte_start(line_1based: int) -> int:
+        idx = line_1based - 1
+        return offsets[idx] if 0 <= idx < len(offsets) else 0
+
+    HTTP_METHODS = ("get", "post", "put", "delete", "patch", "options", "head")
+
+    # Path operations
+    for path_str, path_item in (data.get("paths") or {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        path_line = _find_line(str(path_str))
+        for method in HTTP_METHODS:
+            op = path_item.get(method)
+            if not isinstance(op, dict):
+                continue
+            symbol_name = f"{method.upper()} {path_str}"
+            op_line = _find_line(method, path_line - 1)
+            summary = (op.get("summary") or op.get("description") or "").strip()
+            op_id = (op.get("operationId") or "").strip()
+            signature = symbol_name
+            if op_id:
+                signature += f"  # {op_id}"
+            elif summary:
+                signature += f"  # {summary[:60]}"
+            bs = _byte_start(op_line)
+            sym = Symbol(
+                id=make_symbol_id(filename, symbol_name, "function"),
+                file=filename,
+                name=symbol_name,
+                qualified_name=symbol_name,
+                kind="function",
+                language="openapi",
+                signature=signature,
+                docstring=summary,
+                line=op_line,
+                end_line=op_line,
+                byte_offset=bs,
+                byte_length=len(signature.encode("utf-8")),
+                content_hash=compute_content_hash(signature.encode("utf-8")),
+            )
+            symbols.append(sym)
+
+    # Schemas: components/schemas (v3) or definitions (v2)
+    schemas: dict = {}
+    components = data.get("components") or {}
+    if isinstance(components, dict):
+        schemas = components.get("schemas") or {}
+    if not schemas:
+        schemas = data.get("definitions") or {}
+
+    for schema_name, schema_def in (schemas or {}).items():
+        if not isinstance(schema_def, dict):
+            continue
+        description = (schema_def.get("description") or "").strip()
+        schema_type = schema_def.get("type", "object")
+        signature = f"schema {schema_name}"
+        if schema_type and schema_type != "object":
+            signature += f": {schema_type}"
+        schema_line = _find_line(str(schema_name))
+        bs = _byte_start(schema_line)
+        sym = Symbol(
+            id=make_symbol_id(filename, schema_name, "type"),
+            file=filename,
+            name=schema_name,
+            qualified_name=schema_name,
+            kind="type",
+            language="openapi",
+            signature=signature,
+            docstring=description,
+            line=schema_line,
+            end_line=schema_line,
+            byte_offset=bs,
+            byte_length=len(signature.encode("utf-8")),
+            content_hash=compute_content_hash(signature.encode("utf-8")),
+        )
+        symbols.append(sym)
+
     return symbols
