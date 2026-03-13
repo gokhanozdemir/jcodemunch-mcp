@@ -286,6 +286,37 @@ Environment variables are optional:
 
 ---
 
+## Step 3: Tell Claude to actually use it
+
+> **This step is not optional.**
+>
+> Installing the MCP server makes the tools *available* — but Claude will not use them automatically. Without instructions, Claude defaults to its built-in file tools (read, grep, etc.) and never touches jCodeMunch. This is the single most common reason users install the server and see no difference.
+
+Create a `CLAUDE.md` file that instructs Claude to use jCodeMunch for all code lookups.
+
+### Global (applies to every project)
+
+Create or edit `~/.claude/CLAUDE.md`:
+
+```markdown
+Use jcodemunch-mcp for all code lookups. Never read full files when MCP is available.
+
+1. Call `list_repos` first — if the project is not indexed, call `index_folder` with the current directory.
+2. Use `search_symbols` / `get_symbol` to find and retrieve code by symbol name.
+3. Use `get_repo_outline` or `get_file_outline` to explore structure.
+4. Fall back to direct file reads only when editing or when MCP is unavailable.
+```
+
+### Project-level only
+
+Create `CLAUDE.md` in your project root with the same content. Claude Code merges project-level and global instructions automatically.
+
+### Verify it's working
+
+Ask Claude: *"What repos do you have indexed?"* — it should call `list_repos`. If it responds without calling any tool, re-check that `CLAUDE.md` exists and that the MCP server appears in `/mcp` (Claude Code) or the server list in Claude Desktop.
+
+---
+
 ## Usage Examples
 
 ```
@@ -339,6 +370,7 @@ Every tool response includes a `_meta` envelope with timing, token savings, and 
 
 ## Recent Updates
 
+**v1.4.1** — CLI interface (`cli/cli.py`) for terminal/pipeline use; "Tell Claude to use it" setup section in README
 **v0.2.10** — Pin `mcp<1.10.0` to prevent Windows `win32api` DLL crash on startup
 **v0.2.9** — Community savings meter: anonymous token savings shared to a live global counter at j.gravelle.us (opt-out via `JCODEMUNCH_SHARE_SAVINGS=0`); updated model pricing (Opus $25/1M, GPT-5 $10/1M)
 **v0.2.8** — Estimated cost avoided added to every `_meta` response (`cost_avoided`, `total_cost_avoided`)
