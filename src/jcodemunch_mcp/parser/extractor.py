@@ -4404,7 +4404,9 @@ def _parse_xml_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
     or classes — the extractable symbols are:
 
       - Document root element (<window>, <page>, <root>) -> type symbol
-      - Elements with id attributes (<textbox id="search">) -> constant symbols
+      - Elements with id/name/key identity attributes -> constant symbols
+        (id takes priority; name and key are checked as fallbacks)
+        qualified_name encodes element type: tag::value (e.g. block::foundationConcrete)
       - <script src="..."> references -> function symbols
 
     Preceding <!-- ... --> comments are captured as docstrings.
@@ -4575,17 +4577,24 @@ def _parse_xml_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
                     )
                     symbols.append(sym)
 
-            # 3. Elements with id attribute -> constant symbol
+            # 3. Elements with id/name/key attribute -> constant symbol
+            # Priority: id > name > key (first match wins to avoid duplicates)
             elem_id = _get_attr(node, "id")
-            if elem_id:
-                signature = f'<{tag} id="{elem_id}"/>'
+            elem_name = _get_attr(node, "name")
+            elem_key = _get_attr(node, "key")
+            ident_attr, ident_val = next(
+                ((a, v) for a, v in (("id", elem_id), ("name", elem_name), ("key", elem_key)) if v),
+                (None, None),
+            )
+            if ident_val:
+                signature = f'<{tag} {ident_attr}="{ident_val}"/>'
                 docstring = _preceding_comment(node)
 
                 sym = Symbol(
-                    id=make_symbol_id(filename, elem_id, "constant"),
+                    id=make_symbol_id(filename, ident_val, "constant"),
                     file=filename,
-                    name=elem_id,
-                    qualified_name=elem_id,
+                    name=ident_val,
+                    qualified_name=f"{tag}::{ident_val}",
                     kind="constant",
                     language="xml",
                     signature=signature,
