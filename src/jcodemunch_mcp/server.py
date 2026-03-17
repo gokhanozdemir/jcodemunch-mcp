@@ -411,7 +411,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_context_bundle",
-            description="Get a context bundle for a symbol: its full definition plus all import/require statements from the same file. Gives an AI just enough context to understand and modify a symbol without loading the entire file. Use after identifying a symbol via search_symbols or get_file_outline.",
+            description="Get a context bundle: full source + imports for one or more symbols. Multi-symbol bundles deduplicate imports when symbols share a file. Set include_callers=true to also get the list of files that directly import each symbol's file — useful for understanding usage before refactoring.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -421,10 +421,20 @@ async def list_tools() -> list[Tool]:
                     },
                     "symbol_id": {
                         "type": "string",
-                        "description": "Symbol ID from get_file_outline or search_symbols"
+                        "description": "Single symbol ID (backward-compatible). Use symbol_ids for multi-symbol bundles."
+                    },
+                    "symbol_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of symbol IDs for a multi-symbol bundle. Imports are deduplicated across symbols that share a file."
+                    },
+                    "include_callers": {
+                        "type": "boolean",
+                        "description": "When true, each symbol entry includes a 'callers' list of files that directly import its defining file.",
+                        "default": False
                     }
                 },
-                "required": ["repo", "symbol_id"]
+                "required": ["repo"]
             }
         ),
         Tool(
@@ -669,7 +679,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 functools.partial(
                     get_context_bundle,
                     repo=arguments["repo"],
-                    symbol_id=arguments["symbol_id"],
+                    symbol_id=arguments.get("symbol_id"),
+                    symbol_ids=arguments.get("symbol_ids"),
+                    include_callers=arguments.get("include_callers", False),
                     storage_path=storage_path,
                 )
             )
