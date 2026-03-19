@@ -421,7 +421,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="find_importers",
-            description="Find all files that import from a given file path. Answers 'what uses this file?'. For dbt, resolves {{ ref() }} edges; {{ source() }} edges are extracted but not resolvable to files since sources are external. Requires re-indexing with v1.3.0+.",
+            description="Find all files that import from a given file path. Answers 'what uses this file?'. Each result includes has_importers (bool) indicating whether that importer is itself imported — use this to detect transitive dead code chains (an importer with has_importers=false is itself unreachable). For dbt, resolves {{ ref() }} edges; {{ source() }} edges are extracted but not resolvable to files since sources are external. Requires re-indexing with v1.3.0+.",
             inputSchema={
                 "type": "object",
                 "properties": {

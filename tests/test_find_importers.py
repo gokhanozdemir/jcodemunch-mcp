@@ -453,6 +453,60 @@ class TestFindImporters:
         assert "agg_summary.sql" in importer_files
         assert "dim_client.sql" not in importer_files
 
+    def test_has_importers_alive_importer(self, tmp_path):
+        """An importer that is itself imported should have has_importers=True."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+
+        # chain: app.js -> loader.js -> utils.js
+        _write(src / "utils.js", "export function util() {}\n")
+        _write(src / "loader.js", "import { util } from './utils';\nexport function load() {}\n")
+        _write(src / "app.js", "import { load } from './loader';\nload();\n")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        importers = find_importers(
+            repo=result["repo"],
+            file_path="utils.js",
+            storage_path=str(store),
+        )
+        assert importers["importer_count"] == 1
+        loader = importers["importers"][0]
+        assert loader["file"] == "loader.js"
+        # loader.js is imported by app.js, so it is reachable
+        assert loader["has_importers"] is True
+
+    def test_has_importers_dead_chain(self, tmp_path):
+        """An importer with no importers of its own should have has_importers=False.
+
+        This is the storageLoader.js scenario from issue #130: a file appears to
+        have an importer (firestoreDocumentLoader.js) but that importer is itself
+        never imported — revealing a transitive dead code chain.
+        """
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+
+        # storage.js is imported by dead_loader.js, but dead_loader.js has no importers.
+        _write(src / "storage.js", "export function store() {}\n")
+        _write(src / "dead_loader.js", "import { store } from './storage';\nexport function load() {}\n")
+        # active.js exists but imports nothing from dead_loader
+        _write(src / "active.js", "export function main() {}\n")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        importers = find_importers(
+            repo=result["repo"],
+            file_path="storage.js",
+            storage_path=str(store),
+        )
+        assert importers["importer_count"] == 1
+        dead_loader = importers["importers"][0]
+        assert dead_loader["file"] == "dead_loader.js"
+        # dead_loader.js has no importers — chain is dead
+        assert dead_loader["has_importers"] is False
+
     def test_max_results_truncation(self, tmp_path):
         src = tmp_path / "src"
         store = tmp_path / "store"

@@ -48,6 +48,17 @@ def find_importers(
         }
 
     source_files = frozenset(index.source_files)
+
+    # Build a set of all files that are imported by at least one other file.
+    # Used to annotate each importer with has_importers so the caller can detect
+    # dead chains (an importer with has_importers=False is itself unreachable).
+    files_that_are_imported: set[str] = set()
+    for src_file, file_imports in index.imports.items():
+        for imp in file_imports:
+            resolved = resolve_specifier(imp["specifier"], src_file, source_files)
+            if resolved:
+                files_that_are_imported.add(resolved)
+
     results = []
 
     for src_file, file_imports in index.imports.items():
@@ -60,6 +71,7 @@ def find_importers(
                     "file": src_file,
                     "specifier": imp["specifier"],
                     "names": imp.get("names", []),
+                    "has_importers": src_file in files_that_are_imported,
                 })
                 break  # one match per file is enough
 
