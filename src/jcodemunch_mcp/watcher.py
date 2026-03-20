@@ -529,10 +529,6 @@ async def watch_folders(
 # worktree helpers
 # ---------------------------------------------------------------------------
 
-# Branch patterns that indicate an agent-created worktree
-_WORKTREE_BRANCH_RE = re.compile(r"^refs/heads/(claude/|agent/|worktree-)")
-
-
 def _local_repo_id(folder_path: str) -> str:
     """Compute the repo identifier that index_folder would use for a local path."""
     p = Path(folder_path).resolve()
@@ -541,9 +537,8 @@ def _local_repo_id(folder_path: str) -> str:
 
 
 def parse_git_worktrees(repo_path: str) -> set[str]:
-    """Run ``git worktree list --porcelain`` and return paths of agent-created worktrees.
+    """Run ``git worktree list --porcelain`` and return paths of non-main worktrees.
 
-    Filters to worktrees whose branch matches ``agent/*`` or ``worktree-*``.
     Skips the first entry (the main working copy) and prunable entries.
     """
     try:
@@ -561,37 +556,29 @@ def parse_git_worktrees(repo_path: str) -> set[str]:
 
     worktrees: set[str] = set()
     current_path: Optional[str] = None
-    current_branch: Optional[str] = None
     is_prunable = False
-    is_first = True
+    first_path: Optional[str] = None
 
     for line in result.stdout.splitlines():
         if line.startswith("worktree "):
             # Flush previous entry
-            if current_path and not is_first:
-                if current_branch and _WORKTREE_BRANCH_RE.match(current_branch) and not is_prunable:
-                    worktrees.add(current_path)
+            if current_path and current_path != first_path and not is_prunable:
+                worktrees.add(current_path)
             current_path = line[len("worktree "):]
-            current_branch = None
+            if first_path is None:
+                first_path = current_path
             is_prunable = False
-            is_first = False if current_path else is_first
-        elif line.startswith("branch "):
-            current_branch = line[len("branch "):]
         elif line.startswith("prunable"):
             is_prunable = True
         elif line == "":
             # Blank line separates entries; flush
-            if current_path and not is_first:
-                if current_branch and _WORKTREE_BRANCH_RE.match(current_branch) and not is_prunable:
-                    worktrees.add(current_path)
-            # The very first entry was already processed when we hit the second "worktree" line,
-            # but handle the edge case of only one entry
+            if current_path and current_path != first_path and not is_prunable:
+                worktrees.add(current_path)
             current_path = None
-            current_branch = None
             is_prunable = False
 
     # Flush last entry (no trailing blank line in some git versions)
-    if current_path and current_branch and _WORKTREE_BRANCH_RE.match(current_branch) and not is_prunable:
+    if current_path and current_path != first_path and not is_prunable:
         worktrees.add(current_path)
 
     return worktrees

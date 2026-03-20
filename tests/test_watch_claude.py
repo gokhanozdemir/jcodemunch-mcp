@@ -155,13 +155,13 @@ class TestParseGitWorktrees:
         with patch("jcodemunch_mcp.watcher.subprocess.run", return_value=fake_result):
             return parse_git_worktrees("/fake/repo")
 
-    def test_filters_by_branch(self):
+    def test_includes_all_non_main_worktrees(self):
         result = self._run_with_output(PORCELAIN_OUTPUT)
-        # Should include agent/*, claude/* and worktree-* but not main or feature/manual
+        # Should include all non-main, non-prunable worktrees regardless of branch name
         assert "/home/user/.claude-worktrees/project/dreamy-fox" in result
         assert "/home/user/.claude/worktrees/feature-auth" in result
         assert "/home/user/.claude/worktrees/claude-feature-x" in result
-        assert "/home/user/.claude/worktrees/manual-branch" not in result
+        assert "/home/user/.claude/worktrees/manual-branch" in result
 
     def test_skips_main_worktree(self):
         result = self._run_with_output(PORCELAIN_OUTPUT)
