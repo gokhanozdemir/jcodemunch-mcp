@@ -278,3 +278,74 @@ source code. Restart Claude Code to pick up changes.
 | `jcodemunch-mcp` not found | Add the Python Scripts directory to your PATH (see Step 1). Run `where jcodemunch-mcp` to find the exact location. |
 | Index seems stale | Run `index_folder` again, or start the watcher (Step 5). |
 | Python version error | Need Python 3.10+. Check with `python --version`. |
+
+---
+
+## Using jCodeMunch with the GSD plugin
+
+If you use the [GSD (Get-Shit-Done)](https://github.com/get-shit-done/gsd)
+plugin for Claude Code, its subagents (executor, planner, researcher, etc.)
+will **not** use jCodeMunch out of the box. There are two reasons:
+
+1. **Tool allowlist** — each GSD agent has a fixed list of tools in its YAML
+   frontmatter. None of them include `mcp__jcodemunch__*`, so even if
+   instructions say "use jCodeMunch", the subagent cannot call the tools.
+2. **Instructions** — GSD subagents read `./CLAUDE.md` from the project root,
+   not your global `%USERPROFILE%\.claude\CLAUDE.md`. If your jCodeMunch
+   instructions are only in the global file, subagents never see them.
+
+### Fix: add jCodeMunch to GSD agent tool allowlists
+
+GSD agent definitions live in `%USERPROFILE%\.claude\agents\gsd-*.md`. Each
+file has a YAML frontmatter block with a `tools:` line. You need to append
+`mcp__jcodemunch__*` to that line for every agent that explores code.
+
+**Before** (example from `gsd-executor.md`):
+
+```yaml
+tools: Read, Write, Edit, Bash, Grep, Glob
+```
+
+**After**:
+
+```yaml
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__jcodemunch__*
+```
+
+Here is the complete list of files and their updated `tools:` lines:
+
+| File | Updated `tools:` line |
+|------|----------------------|
+| `gsd-executor.md` | `Read, Write, Edit, Bash, Grep, Glob, mcp__jcodemunch__*` |
+| `gsd-planner.md` | `Read, Write, Bash, Glob, Grep, WebFetch, mcp__context7__*, mcp__jcodemunch__*` |
+| `gsd-phase-researcher.md` | `Read, Write, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*, mcp__jcodemunch__*` |
+| `gsd-project-researcher.md` | `Read, Write, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*, mcp__jcodemunch__*` |
+| `gsd-debugger.md` | `Read, Write, Edit, Bash, Grep, Glob, WebSearch, mcp__jcodemunch__*` |
+| `gsd-codebase-mapper.md` | `Read, Bash, Grep, Glob, Write, mcp__jcodemunch__*` |
+| `gsd-verifier.md` | `Read, Write, Bash, Grep, Glob, mcp__jcodemunch__*` |
+| `gsd-plan-checker.md` | `Read, Bash, Glob, Grep, mcp__jcodemunch__*` |
+| `gsd-integration-checker.md` | `Read, Bash, Grep, Glob, mcp__jcodemunch__*` |
+| `gsd-nyquist-auditor.md` | `Read, Write, Edit, Bash, Glob, Grep, mcp__jcodemunch__*` |
+| `gsd-roadmapper.md` | `Read, Write, Bash, Glob, Grep, mcp__jcodemunch__*` |
+| `gsd-research-synthesizer.md` | `Read, Write, Bash, mcp__jcodemunch__*` |
+
+Open each file, find the `tools:` line, and append `, mcp__jcodemunch__*` at
+the end. The wildcard `*` covers all jCodeMunch tools
+(`get_file_outline`, `search_symbols`, `get_symbol`, etc.) so you don't need
+to list them individually.
+
+### Also: project-level CLAUDE.md
+
+Even with the tools unlocked, subagents need instructions telling them to
+prefer jCodeMunch over built-in tools. GSD subagents read `./CLAUDE.md` from
+the **project root**, not the global one. If your Code Exploration Policy
+(from Step 3) is only in `%USERPROFILE%\.claude\CLAUDE.md`, copy it into a
+`CLAUDE.md` at the root of each project where you want GSD subagents to use
+jCodeMunch.
+
+### Caution
+
+These agent files are managed by the GSD plugin. When you update GSD
+(`/gsd:update`), your changes may be overwritten. After each GSD update,
+check whether the `tools:` lines still include `mcp__jcodemunch__*` and
+re-apply if needed.
