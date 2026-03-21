@@ -294,7 +294,102 @@ class SQLiteIndexStore:
         file_mtimes: Optional[dict[str, float]] = None,
     ) -> Optional[CodeIndex]:
         """Incrementally update an existing index (delta write)."""
-        raise NotImplementedError
+        db_path = self._db_path(owner, name)
+        if not db_path.exists():
+            return None
+
+        conn = self._connect(db_path)
+        try:
+            conn.execute("BEGIN")
+
+            # Delete symbols for changed + deleted files
+            files_to_remove = list(set(deleted_files) | set(changed_files))
+            if files_to_remove:
+                placeholders = ",".join("?" * len(files_to_remove))
+                conn.execute(f"DELETE FROM symbols WHERE file IN ({placeholders})", files_to_remove)
+
+            # Delete file records for deleted files
+            if deleted_files:
+                placeholders = ",".join("?" * len(deleted_files))
+                conn.execute(f"DELETE FROM files WHERE path IN ({placeholders})", deleted_files)
+
+            # Insert new symbols
+            if new_symbols:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO symbols (id, file, name, kind, signature, summary, "
+                    "docstring, line, end_line, byte_offset, byte_length, parent, data) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [self._symbol_to_row(s) for s in new_symbols],
+                )
+
+            # Update file records for changed + new files
+            changed_or_new = sorted(set(changed_files) | set(new_files))
+            for fp in changed_or_new:
+                conn.execute(
+                    "INSERT OR REPLACE INTO files (path, hash, mtime_ns, language, "
+                    "summary, blob_sha, imports) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        fp,
+                        (file_hashes or {}).get(fp, ""),
+                        (file_mtimes or {}).get(fp),
+                        (file_languages or {}).get(fp, ""),
+                        (file_summaries or {}).get(fp, ""),
+                        (file_blob_shas or {}).get(fp, ""),
+                        json.dumps((imports or {}).get(fp, [])),
+                    ),
+                )
+
+            # Update meta
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                ("indexed_at", datetime.now().isoformat()),
+            )
+            if git_head:
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                    ("git_head", git_head),
+                )
+            if context_metadata is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                    ("context_metadata", json.dumps(context_metadata)),
+                )
+
+            # Recompute languages from files table
+            lang_rows = conn.execute(
+                "SELECT language, COUNT(*) as cnt FROM files WHERE language != '' GROUP BY language"
+            ).fetchall()
+            computed_langs = {r["language"]: r["cnt"] for r in lang_rows}
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                ("languages", json.dumps(computed_langs)),
+            )
+
+            # Fetch final state BEFORE commit — same transaction, no second round-trip
+            all_symbol_rows = conn.execute("SELECT * FROM symbols").fetchall()
+            all_file_rows = conn.execute("SELECT * FROM files").fetchall()
+            meta = self._read_meta(conn)
+
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Update content cache
+        content_dir = self._content_dir(owner, name)
+        content_dir.mkdir(parents=True, exist_ok=True)
+        for fp in deleted_files:
+            dead = self._safe_content_path(content_dir, fp)
+            if dead and dead.exists():
+                dead.unlink()
+        for fp, content in raw_files.items():
+            dest = self._safe_content_path(content_dir, fp)
+            if not dest:
+                raise ValueError(f"Unsafe file path: {fp}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            self._write_cached_text(dest, content)
+
+        # Build CodeIndex from already-fetched rows (no second round-trip)
+        return self._build_index_from_rows(meta, all_symbol_rows, all_file_rows, owner, name)
 
     def detect_changes_with_mtimes(
         self,
