@@ -192,10 +192,15 @@ def search_symbols(
     if language:
         results = [s for s in results if s.get("language") == language]
 
-    # BM25 scoring + centrality
+    # BM25 corpus stats — cached on CodeIndex, computed once per index load
     query_terms = _tokenize(query) or [query.lower()]
-    idf, avgdl = _compute_bm25(index.symbols)
-    centrality = _compute_centrality(index.symbols, index.imports)
+    cache = index._bm25_cache
+    if "idf" not in cache:
+        cache["idf"], cache["avgdl"] = _compute_bm25(index.symbols)
+        cache["centrality"] = _compute_centrality(index.symbols, index.imports)
+    idf = cache["idf"]
+    avgdl = cache["avgdl"]
+    centrality = cache["centrality"]
 
     candidates_scored = len(results)
     scored_results = []
