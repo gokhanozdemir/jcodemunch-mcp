@@ -711,7 +711,6 @@ Representative architectural dependencies include:
 | `google-generativeai`       | Gemini-based summarization      |
 | `pyyaml`                    | dbt schema and provider parsing |
 | `watchfiles`                | optional watch mode             |
-| `filelock`                  | cross-process index protection  |
 | `sqlite3` (stdlib)          | WAL-mode index storage backend  |
 
 These dependencies support the core architectural layers: protocol transport, repository acquisition, parsing, storage, summarization, file watching, and safe concurrent access.
