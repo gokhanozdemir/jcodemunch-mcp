@@ -488,15 +488,16 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="find_references",
-            description="Find all files that import or reference a given identifier (symbol name, module name, or class name). Answers 'where is this used?'. For dbt, traces {{ ref() }} edges; {{ source() }} specifiers are extracted but not resolvable since sources are external. Requires re-indexing with v1.3.0+.",
+            description="Find all files that import or reference a given identifier (symbol name, module name, or class name). Answers 'where is this used?'. For dbt, traces {{ ref() }} edges; {{ source() }} specifiers are extracted but not resolvable since sources are external. Requires re-indexing with v1.3.0+. Use identifiers for batch queries across multiple identifiers.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "repo": {"type": "string", "description": "Repository identifier"},
-                    "identifier": {"type": "string", "description": "Symbol or module name to search for (e.g. 'bulkImport', 'IntakeService')"},
+                    "identifier": {"type": "string", "description": "Symbol or module name to search for (e.g. 'bulkImport', 'IntakeService'). Use for single-identifier queries. Cannot be used together with identifiers."},
+                    "identifiers": {"type": "array", "items": {"type": "string"}, "description": "List of symbol or module names to search for (batch mode). Returns a results array. Cannot be used together with identifier."},
                     "max_results": {"type": "integer", "default": 50, "description": "Maximum results"},
                 },
-                "required": ["repo", "identifier"],
+                "required": ["repo"],
             },
         ),
         Tool(
@@ -851,7 +852,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 functools.partial(
                     find_references,
                     repo=arguments["repo"],
-                    identifier=arguments["identifier"],
+                    identifier=arguments.get("identifier"),
+                    identifiers=arguments.get("identifiers"),
                     max_results=arguments.get("max_results", 50),
                     storage_path=storage_path,
                 )

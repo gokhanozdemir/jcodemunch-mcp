@@ -718,6 +718,41 @@ class TestFindReferences:
         )
         assert "tip" in refs["_meta"]
 
+    def test_batch_identifiers(self, tmp_path):
+        """find_references with identifiers returns grouped results."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "utils.js", "export function helper() {}\nexport function format() {}")
+        _write(src / "app.js", "import { helper, format } from './utils';")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        repo = result["repo"]
+
+        result = find_references(
+            repo=repo,
+            identifiers=["helper", "format"],
+            storage_path=str(store),
+        )
+        assert "results" in result
+        assert len(result["results"]) == 2
+        ids = [r["identifier"] for r in result["results"]]
+        assert "helper" in ids
+        assert "format" in ids
+
+    def test_singular_identifier_still_works(self, tmp_path):
+        """Existing singular identifier param still works (backward compat)."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "utils.js", "export function helper() {}")
+        _write(src / "app.js", "import { helper } from './utils';")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        repo = result["repo"]
+
+        result = find_references(repo=repo, identifier="helper", storage_path=str(store))
+        assert "references" in result
+        assert "results" not in result
+
 
 # ---------------------------------------------------------------------------
 # Tests: imports persisted and loaded correctly
