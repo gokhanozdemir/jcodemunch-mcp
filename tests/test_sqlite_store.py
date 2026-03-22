@@ -367,6 +367,85 @@ def test_load_index_cache_cleared_on_delete(tmp_path):
     assert idx2 is None
 
 
+def test_cache_key_uses_safe_name_after_save(tmp_path):
+    """save_index pre-warms cache with safe_name so load_index hits it.
+
+    Regression: save_index cached with raw name ("my project (v2)") but
+    load_index looked up with safe_name ("my-project-v2"), causing permanent
+    cache misses (~110ms per tool call instead of <0.1ms).
+    """
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    raw_name = "my project (v2)"
+
+    store.save_index(
+        owner="local", name=raw_name,
+        source_files=["a.py"], symbols=[_make_symbol("f")],
+        raw_files={"a.py": "x"},
+    )
+
+    idx1 = store.load_index("local", raw_name)
+    assert idx1 is not None
+
+    idx2 = store.load_index("local", raw_name)
+    assert idx2 is idx1, "Cache miss: load_index did not find the pre-warmed entry from save_index"
+
+
+def test_cache_key_uses_safe_name_after_incremental_save(tmp_path):
+    """incremental_save pre-warms cache with safe_name so load_index hits it.
+
+    Regression: same mismatch as test_cache_key_uses_safe_name_after_save but
+    for the incremental (file-watcher) code path.
+    """
+    import time
+
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    raw_name = "my project (v2)"
+
+    store.save_index(
+        owner="local", name=raw_name,
+        source_files=["a.py"], symbols=[_make_symbol("f")],
+        raw_files={"a.py": "x"},
+    )
+
+    time.sleep(0.01)  # ensure mtime changes
+    store.incremental_save(
+        owner="local", name=raw_name,
+        changed_files=[], new_files=["b.py"], deleted_files=[],
+        new_symbols=[_make_symbol("g", file="b.py")],
+        raw_files={"b.py": "y"},
+    )
+
+    idx1 = store.load_index("local", raw_name)
+    assert idx1 is not None
+    assert len(idx1.symbols) == 2
+
+    idx2 = store.load_index("local", raw_name)
+    assert idx2 is idx1, "Cache miss: load_index did not find the pre-warmed entry from incremental_save"
+
+
+def test_cache_evict_uses_safe_name_on_delete(tmp_path):
+    """delete_index evicts cache using safe_name so stale entries don't persist.
+
+    Regression: delete_index evicted with raw name but cache was stored with
+    safe_name, leaving a stale entry that could be served after deletion.
+    """
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    raw_name = "my project (v2)"
+
+    store.save_index(
+        owner="local", name=raw_name,
+        source_files=["a.py"], symbols=[_make_symbol("f")],
+        raw_files={"a.py": "x"},
+    )
+
+    idx1 = store.load_index("local", raw_name)
+    assert idx1 is not None
+
+    store.delete_index("local", raw_name)
+    idx2 = store.load_index("local", raw_name)
+    assert idx2 is None, "Stale cache entry survived delete_index"
+
+
 def test_v4_to_v5_migration(tmp_path):
     """Opening a v4 database auto-migrates to v5 with promoted columns."""
     import json as _json

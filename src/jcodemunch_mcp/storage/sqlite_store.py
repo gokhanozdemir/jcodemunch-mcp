@@ -440,7 +440,9 @@ class SQLiteIndexStore:
             self._write_cached_text(file_dest, content)
 
         # Pre-warm cache so the next load_index() is instant
-        _cache_put(owner, name, db_path.stat().st_mtime_ns, index)
+        # Use safe_name to match the key used by load_index's _cache_get
+        safe_name = self._safe_repo_component(name, "name")
+        _cache_put(owner, safe_name, db_path.stat().st_mtime_ns, index)
         return index
 
     def load_index(self, owner: str, name: str) -> Optional["CodeIndex"]:
@@ -641,7 +643,9 @@ class SQLiteIndexStore:
         # Build CodeIndex from already-fetched rows (no second round-trip)
         index = self._build_index_from_rows(meta, all_symbol_rows, all_file_rows, owner, name)
         # Pre-warm cache so the next load_index() is instant
-        _cache_put(owner, name, db_path.stat().st_mtime_ns, index)
+        # Use safe_name to match the key used by load_index's _cache_get
+        safe_name = self._safe_repo_component(name, "name")
+        _cache_put(owner, safe_name, db_path.stat().st_mtime_ns, index)
         return index
 
     def detect_changes_with_mtimes(
@@ -793,7 +797,8 @@ class SQLiteIndexStore:
 
     def delete_index(self, owner: str, name: str) -> bool:
         """Delete a repo's .db, .db-wal, .db-shm, and content dir."""
-        _cache_evict(owner, name)
+        safe_name = self._safe_repo_component(name, "name")
+        _cache_evict(owner, safe_name)
         db_path = self._db_path(owner, name)
         deleted = False
 
