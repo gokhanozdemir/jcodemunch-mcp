@@ -400,6 +400,45 @@ def index_folder(
     try:
         t0 = time.monotonic()
 
+        # ── Deferred summarization helper (defined before fast path so it is in scope) ──
+
+        def _run_deferred_summarize(
+            gen: int,
+            repo_full: str,
+            symbols: list,
+            file_contents: dict,
+            store: "IndexStore",
+            owner: str,
+            repo_name: str,
+        ) -> None:
+            """Fill in AI summaries and update the store. Checks generation counter to abandon stale work."""
+            from ..reindex_state import _get_state
+            from ._indexing_pipeline import deferred_summarize
+
+            # Check 1: has a newer reindex started while we were parsing?
+            if _get_state(repo_full).deferred_generation != gen:
+                return
+
+            summarized = deferred_summarize(symbols, file_contents, use_ai_summaries=True)
+            if not summarized:
+                return
+
+            # Check 2: has another reindex started while we were summarizing?
+            if _get_state(repo_full).deferred_generation != gen:
+                return
+
+            # Update only the symbol summaries (empty change lists → INSERT OR REPLACE updates existing rows)
+            try:
+                store.incremental_save(
+                    owner=owner, name=repo_name,
+                    changed_files=[], new_files=[], deleted_files=[],
+                    new_symbols=summarized,
+                    raw_files={},
+                )
+                logger.debug("Deferred summarization saved %d symbols for %s", len(summarized), repo_full)
+            except Exception as e:
+                logger.warning("Deferred summarization failed for %s: %s", repo_full, e)
+
         # ── Fast path: watcher-driven incremental reindex ──
         # When the watcher provides the exact change set, skip full directory
         # discovery (~3s on Windows) and only process the affected files.
@@ -597,10 +636,15 @@ def index_folder(
                 # Fire daemon thread for deferred summarization — index is already saved
                 # with empty summaries; this fills them in without blocking the response.
                 if new_symbols and use_ai_summaries:
+                    from ..reindex_state import _get_state
+                    _repo_full = f"{owner}/{repo_name}"
+                    _gen = _get_state(_repo_full).deferred_generation
                     _summaries_copy = list(new_symbols)
                     _contents_copy = dict(raw_files_subset)
                     _daemon = threading.Thread(
-                        target=lambda: deferred_summarize(_summaries_copy, _contents_copy, use_ai=True),
+                        target=lambda _g=_gen, _s=_summaries_copy, _c=_contents_copy: _run_deferred_summarize(
+                            _g, _repo_full, _s, _c, store, owner, repo_name,
+                        ),
                         daemon=True,
                         name="deferred-summarizer",
                     )

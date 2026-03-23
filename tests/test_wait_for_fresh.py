@@ -4,16 +4,18 @@ import pytest
 import json
 
 from jcodemunch_mcp.server import list_tools, call_tool
-from jcodemunch_mcp.reindex_state import _repo_states, _freshness_mode
+from jcodemunch_mcp.reindex_state import _repo_states, _repo_events, _freshness_mode
 
 
 @pytest.fixture(autouse=True)
 def reset_state():
     """Reset module-level state before each test."""
     _repo_states.clear()
+    _repo_events.clear()
     _freshness_mode.clear()
     yield
     _repo_states.clear()
+    _repo_events.clear()
     _freshness_mode.clear()
 
 
