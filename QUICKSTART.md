@@ -101,6 +101,8 @@ You can also add the same block to a project-level `CLAUDE.md` in your repo root
 | Find what imports a file | `find_importers { "repo": "...", "file_path": "..." }` |
 | Find all references to a name | `find_references { "repo": "...", "identifier": "..." }` |
 
+> **Full tool reference with parameters:** [USER_GUIDE.md §6](USER_GUIDE.md#6-tool-reference)
+
 ---
 
 ## Troubleshooting

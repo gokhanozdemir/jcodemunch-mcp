@@ -19,6 +19,12 @@
     <li><a href="#15-best-practices-for-prompting-the-agent">15. Prompting the agent</a></li>
     <li><a href="#16-final-advice">16. Final advice</a></li>
   </ul>
+  <hr style="margin: 0.5rem 0;">
+  <strong>Reference docs</strong>
+  <ul>
+    <li><a href="QUICKSTART.md">Quick Start</a></li>
+    <li><a href="ARCHITECTURE.md">Architecture</a></li>
+  </ul>
 </div>
 
 # jCodeMunch User Guide
@@ -467,21 +473,103 @@ These IDs stay stable across re-indexing as long as path, qualified name, and ki
 
 # 6. Tool reference
 
-| Tool               | What it does              | Key parameters                                                     |
-| ------------------ | ------------------------- | ------------------------------------------------------------------ |
-| `index_repo`       | Index a GitHub repository | `url`, `use_ai_summaries`                                          |
-| `index_folder`     | Index a local folder      | `path`, `extra_ignore_patterns`, `follow_symlinks`                 |
-| `index_file`       | Re-index a single file    | `path`, `use_ai_summaries`, `context_providers`                    |
-| `list_repos`       | List indexed repos        | —                                                                  |
-| `get_file_tree`    | Browse file structure     | `repo`, `path_prefix`                                              |
-| `get_file_outline` | Show symbols in a file    | `repo`, `file_path`                                                |
-| `get_file_content` | Read cached file content  | `repo`, `file_path`, `start_line`, `end_line`                      |
-| `get_symbol`       | Retrieve one symbol       | `repo`, `symbol_id`, `verify`, `context_lines`                     |
-| `get_symbols`      | Retrieve multiple symbols | `repo`, `symbol_ids`                                               |
-| `search_symbols`   | Search the symbol index   | `repo`, `query`, `kind`, `language`, `file_pattern`, `max_results` |
-| `search_text`      | Full-text search          | `repo`, `query`, `file_pattern`, `max_results`, `context_lines`    |
-| `get_repo_outline` | High-level repo overview  | `repo`                                                             |
-| `invalidate_cache` | Remove cached index       | `repo`                                                             |
+### Indexing & Repository Management
+
+| Tool | What it does | Key parameters |
+|------|--------------|----------------|
+| `index_repo` | Index a GitHub repository | `url`, `incremental`, `use_ai_summaries`, `extra_ignore_patterns` |
+| `index_folder` | Index a local folder | `path`, `incremental`, `use_ai_summaries`, `extra_ignore_patterns`, `follow_symlinks` |
+| `index_file` | Re-index one file — faster than `index_folder` for surgical updates | `path`, `use_ai_summaries`, `context_providers` |
+| `list_repos` | List all indexed repositories | — |
+| `invalidate_cache` | Delete cached index and force a full re-index | `repo` |
+| `wait_for_fresh` | Wait for in-progress watcher reindex to finish before proceeding | `repo`, `timeout_ms` |
+
+### Discovery & Outlines
+
+| Tool | What it does | Key parameters |
+|------|--------------|----------------|
+| `suggest_queries` | Surface useful entry-point files, keywords, and example queries for an unfamiliar repo | `repo` |
+| `get_repo_outline` | High-level overview: directories, file counts, language breakdown, symbol counts | `repo` |
+| `get_file_tree` | Browse file structure, optionally filtered by path prefix | `repo`, `path_prefix`, `include_summaries` |
+| `get_file_outline` | All symbols in a file with full signatures and summaries; supports batch via `file_paths` | `repo`, `file_path`, `file_paths` |
+
+### Retrieval
+
+| Tool | What it does | Key parameters |
+|------|--------------|----------------|
+| `get_symbol` | Retrieve one symbol's exact source by ID; optional drift verification | `repo`, `symbol_id`, `verify`, `context_lines` |
+| `get_symbols` | Retrieve multiple symbols in one call (prefer over repeated `get_symbol`) | `repo`, `symbol_ids` |
+| `get_context_bundle` | Symbol + its imports + optional callers in one bundle; supports multi-symbol and Markdown output | `repo`, `symbol_id`, `symbol_ids`, `include_callers`, `output_format` |
+| `get_file_content` | Read cached file content, optionally sliced to a line range | `repo`, `file_path`, `start_line`, `end_line` |
+
+### Search
+
+| Tool | What it does | Key parameters |
+|------|--------------|----------------|
+| `search_symbols` | Search symbol index by name, signature, summary, or docstring; supports `kind`, `language`, `file_pattern`, token budget, and compact/full detail levels | `repo`, `query`, `kind`, `language`, `file_pattern`, `max_results`, `token_budget`, `detail_level` |
+| `search_text` | Full-text search across indexed file contents; supports regex and context lines | `repo`, `query`, `is_regex`, `file_pattern`, `max_results`, `context_lines` |
+| `search_columns` | Search column metadata across dbt / SQLMesh / database catalog models | `repo`, `query`, `model_pattern`, `max_results` |
+
+### Relationship & Impact Analysis
+
+| Tool | What it does | Key parameters |
+|------|--------------|----------------|
+| `find_importers` | Find all files that import a given file; supports batch via `file_paths` | `repo`, `file_path`, `file_paths`, `max_results` |
+| `find_references` | Find all files that import or reference a given identifier; supports batch via `identifiers` | `repo`, `identifier`, `identifiers`, `max_results` |
+| `check_references` | Quick dead-code check: is an identifier referenced anywhere? Combines import + content search | `repo`, `identifier`, `identifiers`, `search_content`, `max_content_results` |
+| `get_dependency_graph` | File-level dependency graph up to 3 hops; direction = imports, importers, or both | `repo`, `file`, `direction`, `depth` |
+| `get_blast_radius` | Which files break if this symbol changes? Returns confirmed and potential impacted files | `repo`, `symbol`, `depth` |
+| `get_class_hierarchy` | Full inheritance chain (ancestors + descendants) across Python, TS, Java, C#, and more | `repo`, `class_name` |
+| `get_related_symbols` | Symbols related to a given symbol via co-location, shared importers, and name-token overlap | `repo`, `symbol_id`, `max_results` |
+| `get_symbol_diff` | Diff symbol sets of two indexed repo snapshots; detects added, removed, and changed symbols | `repo_a`, `repo_b` |
+
+### Utilities
+
+| Tool | What it does | Key parameters |
+|------|--------------|----------------|
+| `get_session_stats` | Token savings, cost avoided, and per-tool breakdown for the current session | — |
+
+
+
+### Workflow patterns
+
+```
+New / unfamiliar repo?
+  → suggest_queries → get_repo_outline → get_file_tree
+
+Looking for a symbol by name?
+  → search_symbols  (add kind= / language= / file_pattern= to narrow)
+
+Looking for text, strings, or comments?
+  → search_text  (supports regex and context_lines)
+
+Need to read a function or class?
+  → get_file_outline → get_symbol  (or get_symbols for multiple at once)
+
+Need symbol + its imports in one shot?
+  → get_context_bundle
+
+What imports this file?
+  → find_importers
+
+Where is this identifier used?
+  → find_references  (or check_references for a quick yes/no)
+
+What breaks if I change this symbol?
+  → get_blast_radius → find_importers
+
+Class hierarchy?
+  → get_class_hierarchy
+
+File dependency graph?
+  → get_dependency_graph
+
+What changed between two repo snapshots?
+  → get_symbol_diff
+
+Database column search (dbt / SQLMesh)?
+  → search_columns
+```
 
 ---
 
@@ -656,13 +744,13 @@ Do not log to stderr during stdio MCP sessions. Use `--log-file` or `JCODEMUNCH_
 
 # 14. Best practices
 
-1. Start with `get_repo_outline` when entering an unfamiliar repo.
-2. Use `get_file_outline` before pulling source.
+1. Start with `suggest_queries` on any unfamiliar repo, then `get_repo_outline`.
+2. Use `get_file_outline` before pulling source — see API surface before reading code.
 3. Use `search_symbols` before `get_file_content` whenever possible.
-4. Use `get_symbols` for related items instead of making repeated single-symbol calls.
+4. Use `get_symbols` or `get_context_bundle` for related items instead of repeated `get_symbol` calls.
 5. Use `search_text` for comments, strings, and non-symbol content.
 6. Use `verify: true` when freshness matters.
-7. Re-index when the codebase changes materially.
+7. Re-index when the codebase changes materially. Use `index_file` for single-file updates.
 8. Tell your agent to prefer jCodeMunch, or it may fall back to old brute-force habits.
 
 ---
