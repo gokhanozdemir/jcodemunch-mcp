@@ -289,3 +289,80 @@ class TestGetDescriptions:
 
         result = get_descriptions()
         assert result == {}
+
+
+class TestEnvVarFallback:
+    """Test deprecated env var fallback with warnings."""
+
+    def test_env_var_used_when_config_key_absent(self, monkeypatch, caplog):
+        """Should use env var value when config key not set."""
+        from src.jcodemunch_mcp.config import load_config, get, _GLOBAL_CONFIG, _DEPRECATED_ENV_VARS_LOGGED
+        import logging
+
+        _GLOBAL_CONFIG.clear()
+        _DEPRECATED_ENV_VARS_LOGGED.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Config without max_folder_files
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": false}')
+
+            # Env var set for max_folder_files
+            monkeypatch.setenv("JCODEMUNCH_MAX_FOLDER_FILES", "5000")
+
+            with caplog.at_level(logging.WARNING):
+                load_config(tmpdir)
+
+            # Should use env var value
+            assert get("max_folder_files") == 5000
+
+    def test_warning_logged_once_per_deprecated_var(self, monkeypatch, caplog):
+        """Should log one warning per deprecated env var found."""
+        from src.jcodemunch_mcp.config import load_config, _GLOBAL_CONFIG, _DEPRECATED_ENV_VARS_LOGGED
+        import logging
+
+        _GLOBAL_CONFIG.clear()
+        _DEPRECATED_ENV_VARS_LOGGED.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{}')  # Empty config
+
+            monkeypatch.setenv("JCODEMUNCH_MAX_FOLDER_FILES", "5000")
+            monkeypatch.setenv("JCODEMUNCH_MAX_INDEX_FILES", "15000")
+
+            with caplog.at_level(logging.WARNING):
+                load_config(tmpdir)
+
+            # Should have warnings (one per env var)
+            warning_count = sum(1 for rec in caplog.records if rec.levelname == "WARNING")
+            assert warning_count >= 2
+
+            # Each warning should mention v2.0 removal
+            for rec in caplog.records:
+                if "deprecated" in rec.message.lower():
+                    assert "v2.0" in rec.message
+
+    def test_no_warning_when_config_key_present(self, monkeypatch, caplog):
+        """Should NOT log warning when config key is present."""
+        from src.jcodemunch_mcp.config import load_config, get, _GLOBAL_CONFIG, _DEPRECATED_ENV_VARS_LOGGED
+        import logging
+
+        _GLOBAL_CONFIG.clear()
+        _DEPRECATED_ENV_VARS_LOGGED.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"max_folder_files": 3000}')
+
+            # Env var set but should be ignored (config takes precedence)
+            monkeypatch.setenv("JCODEMUNCH_MAX_FOLDER_FILES", "5000")
+
+            with caplog.at_level(logging.WARNING):
+                load_config(tmpdir)
+
+            # Should NOT log deprecation warning (config key present)
+            assert "deprecated" not in caplog.text.lower()
+
+            # Config value should be used, not env var
+            assert get("max_folder_files") == 3000
