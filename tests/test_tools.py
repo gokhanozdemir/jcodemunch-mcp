@@ -85,32 +85,50 @@ def test_discover_source_files_prioritizes_src():
     assert truncated is True
 
 
-def test_discover_source_files_uses_env_override():
-    """Test that environment override is used when max_files is omitted."""
+def test_discover_source_files_uses_config_override():
+    """Test that config override is used when max_files is omitted."""
+    from jcodemunch_mcp import config as config_module
+
     tree_entries = [
         {"path": f"file{i}.py", "type": "blob", "size": 100}
         for i in range(20)
     ]
 
-    with patch.dict("os.environ", {MAX_INDEX_FILES_ENV_VAR: "7"}, clear=False):
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["max_index_files"] = 7
         files, _, truncated = discover_source_files(tree_entries)
 
-    assert len(files) == 7
-    assert truncated is True
+        assert len(files) == 7
+        assert truncated is True
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
 
 
-def test_discover_source_files_explicit_max_overrides_env():
-    """Explicit max_files should win over environment configuration."""
+def test_discover_source_files_explicit_max_overrides_config():
+    """Explicit max_files should win over config."""
+    from jcodemunch_mcp import config as config_module
+
     tree_entries = [
         {"path": f"file{i}.py", "type": "blob", "size": 100}
         for i in range(20)
     ]
 
-    with patch.dict("os.environ", {MAX_INDEX_FILES_ENV_VAR: "7"}, clear=False):
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["max_index_files"] = 7
         files, _, truncated = discover_source_files(tree_entries, max_files=5)
 
-    assert len(files) == 5
-    assert truncated is True
+        assert len(files) == 5
+        assert truncated is True
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
 
 
 def test_discover_source_files_exact_limit_is_not_truncated():
@@ -231,17 +249,24 @@ class TestNestedGitignore:
 
 
 class TestFolderFileLimitEnvVar:
-    def test_folder_specific_env_var_respected(self, tmp_path):
-        """JCODEMUNCH_MAX_FOLDER_FILES should cap index_folder file discovery."""
+    def test_folder_config_respected(self, tmp_path):
+        """max_folder_files config should cap index_folder file discovery."""
         from jcodemunch_mcp.tools.index_folder import discover_local_files
+        from jcodemunch_mcp import config as config_module
 
         for i in range(10):
             (tmp_path / f"file{i}.py").write_text(f"def f{i}(): pass\n")
 
-        with patch.dict("os.environ", {MAX_FOLDER_FILES_ENV_VAR: "3"}, clear=False):
-            files, _, _ = discover_local_files(tmp_path)
+        orig_config = config_module._GLOBAL_CONFIG.copy()
+        config_module._GLOBAL_CONFIG.clear()
 
-        assert len(files) == 3
+        try:
+            config_module._GLOBAL_CONFIG["max_folder_files"] = 3
+            files, _, _ = discover_local_files(tmp_path)
+            assert len(files) == 3
+        finally:
+            config_module._GLOBAL_CONFIG.clear()
+            config_module._GLOBAL_CONFIG.update(orig_config)
 
     def test_legacy_env_var_still_works_for_folders(self, tmp_path):
         """JCODEMUNCH_MAX_INDEX_FILES should still cap index_folder when folder var unset."""
@@ -250,11 +275,16 @@ class TestFolderFileLimitEnvVar:
         for i in range(10):
             (tmp_path / f"file{i}.py").write_text(f"def f{i}(): pass\n")
 
-        env = {MAX_INDEX_FILES_ENV_VAR: "4"}
-        # Ensure the folder-specific var is absent so legacy fallback is tested
-        with patch.dict("os.environ", env, clear=False):
-            import os
-            os.environ.pop(MAX_FOLDER_FILES_ENV_VAR, None)
+        from jcodemunch_mcp import config as config_module
+
+        orig_config = config_module._GLOBAL_CONFIG.copy()
+        config_module._GLOBAL_CONFIG.clear()
+
+        try:
+            config_module._GLOBAL_CONFIG["max_folder_files"] = 4
             files, _, _ = discover_local_files(tmp_path)
 
-        assert len(files) == 4
+            assert len(files) == 4
+        finally:
+            config_module._GLOBAL_CONFIG.clear()
+            config_module._GLOBAL_CONFIG.update(orig_config)
