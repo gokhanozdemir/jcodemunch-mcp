@@ -42,6 +42,7 @@ from .tools.search_columns import search_columns
 from .tools.get_context_bundle import get_context_bundle
 from .parser.symbols import VALID_KINDS
 from .reindex_state import wait_for_fresh_result, get_reindex_status, await_freshness_if_strict
+from .path_map import ENV_VAR as _PATH_MAP_ENV_VAR
 
 try:
     from .watcher import watch_folders, WatcherError
@@ -1439,6 +1440,8 @@ def _run_config(check: bool = False) -> None:
     row("JCODEMUNCH_MAX_RESULTS", v, d)
     extra = os.environ.get("JCODEMUNCH_EXTRA_IGNORE_PATTERNS", "")
     row("JCODEMUNCH_EXTRA_IGNORE_PATTERNS", extra if extra else dim("(none)"), not extra)
+    path_map_val = os.environ.get(_PATH_MAP_ENV_VAR, "")
+    row(_PATH_MAP_ENV_VAR, path_map_val if path_map_val else dim("(none)"), not path_map_val)
 
     # ── AI Summarizer ─────────────────────────────────────────────────────
     section("AI Summarizer")

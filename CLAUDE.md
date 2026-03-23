@@ -78,6 +78,7 @@ Custom parsers (tree-sitter grammar lacks clean named fields):
 | `JCODEMUNCH_MAX_FOLDER_FILES` | 2,000 | File cap for folder indexing |
 | `JCODEMUNCH_USE_AI_SUMMARIES` | true | Set false/0/no/off to disable AI summaries globally |
 | `JCODEMUNCH_EXTRA_IGNORE_PATTERNS` | — | Always-on gitignore patterns (comma-sep or JSON array); merged with per-call extra_ignore_patterns |
+| `JCODEMUNCH_PATH_MAP` | — | Remap stored path prefixes at retrieval time; format: `orig1=new1,orig2=new2`. Allows an index built on one machine (e.g. Linux `/home/user`) to be used on another (e.g. Windows `D:\Users\user`) without re-indexing |
 | `JCODEMUNCH_STALENESS_DAYS` | 7 | Days before get_repo_outline emits a staleness_warning |
 | `JCODEMUNCH_MAX_RESULTS` | 500 | Hard cap on search_columns result count |
 | `JCODEMUNCH_SHARE_SAVINGS` | 1 | Set 0 to disable anonymous token savings telemetry |
