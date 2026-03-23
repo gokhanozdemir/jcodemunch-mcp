@@ -747,6 +747,11 @@ async def list_tools() -> list[Tool]:
     if disabled:
         tools = [t for t in tools if t.name not in disabled]
 
+    # SQL gating: auto-disable search_columns when SQL not in languages
+    languages = config_module.get("languages")
+    if languages is not None and "sql" not in languages:
+        tools = [t for t in tools if t.name != "search_columns"]
+
     # Merge descriptions from config (runs after disabled_tools filter)
     _apply_description_overrides(tools)
 

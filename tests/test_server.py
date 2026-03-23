@@ -519,6 +519,49 @@ async def test_no_descriptions_config_keeps_original(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sql_removed_auto_disables_search_columns(monkeypatch):
+    """search_columns should be auto-disabled when SQL not in languages."""
+    from jcodemunch_mcp import config as config_module
+
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["languages"] = ["python", "javascript"]
+        config_module._GLOBAL_CONFIG["disabled_tools"] = []  # Explicitly empty
+
+        tools = await list_tools()
+        tool_names = [t.name for t in tools]
+
+        # search_columns should be auto-disabled
+        assert "search_columns" not in tool_names
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
+
+
+@pytest.mark.asyncio
+async def test_sql_enabled_keeps_search_columns(monkeypatch):
+    """search_columns should stay enabled when SQL is in languages."""
+    from jcodemunch_mcp import config as config_module
+
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["languages"] = ["python", "sql"]
+        config_module._GLOBAL_CONFIG["disabled_tools"] = []
+
+        tools = await list_tools()
+        tool_names = [t.name for t in tools]
+
+        assert "search_columns" in tool_names
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
+
+
+@pytest.mark.asyncio
 async def test_language_enum_reflects_config_limited(monkeypatch):
     """Language enum should only include configured languages."""
     from jcodemunch_mcp import config as config_module
