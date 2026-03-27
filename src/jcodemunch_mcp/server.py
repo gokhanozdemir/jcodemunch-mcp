@@ -41,6 +41,7 @@ from .tools.get_class_hierarchy import get_class_hierarchy
 from .tools.get_related_symbols import get_related_symbols
 from .tools.get_symbol_importance import get_symbol_importance
 from .tools.find_dead_code import find_dead_code
+from .tools.get_changed_symbols import get_changed_symbols
 from .tools.suggest_queries import suggest_queries
 from .tools.search_columns import search_columns
 from .tools.get_context_bundle import get_context_bundle
@@ -850,6 +851,42 @@ async def list_tools() -> list[Tool]:
                 "required": ["repo"],
             },
         ),
+        Tool(
+            name="get_changed_symbols",
+            description=(
+                "Map a git diff to affected symbols: given two commits, returns which symbols "
+                "were added, removed, modified, or renamed. Useful after merging a PR to answer "
+                "'what actually changed?' for code review or regression triage. "
+                "Requires a locally indexed repo (index_folder). "
+                "Defaults to comparing current HEAD against the SHA stored at index time."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository identifier — must be locally indexed with index_folder"},
+                    "since_sha": {
+                        "type": "string",
+                        "description": "Compare from this git SHA or ref. Defaults to the SHA stored at index time.",
+                    },
+                    "until_sha": {
+                        "type": "string",
+                        "description": "Compare to this git SHA or ref (default 'HEAD').",
+                        "default": "HEAD",
+                    },
+                    "include_blast_radius": {
+                        "type": "boolean",
+                        "description": "Also return downstream importers (blast radius) for each changed symbol (default false).",
+                        "default": False,
+                    },
+                    "max_blast_depth": {
+                        "type": "integer",
+                        "description": "Hop limit when include_blast_radius=true (default 3, max 5).",
+                        "default": 3,
+                    },
+                },
+                "required": ["repo"],
+            },
+        ),
     ]
     # Filter out disabled tools
     disabled = config_module.get("disabled_tools", [])
@@ -1252,6 +1289,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     min_confidence=arguments.get("min_confidence", 0.8),
                     include_tests=arguments.get("include_tests", False),
                     entry_point_patterns=arguments.get("entry_point_patterns"),
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "get_changed_symbols":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_changed_symbols,
+                    repo=arguments["repo"],
+                    since_sha=arguments.get("since_sha"),
+                    until_sha=arguments.get("until_sha", "HEAD"),
+                    include_blast_radius=arguments.get("include_blast_radius", False),
+                    max_blast_depth=arguments.get("max_blast_depth", 3),
                     storage_path=storage_path,
                 )
             )

@@ -4,6 +4,11 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.11.15] - 2026-03-27
+
+### Added
+- **`get_changed_symbols` tool** — maps a git diff to affected symbols. Given two commits (`since_sha` / `until_sha`, defaulting to index-time SHA vs HEAD), returns `added_symbols`, `removed_symbols`, and `changed_symbols` (with `change_type`: "added", "removed", "modified", or "renamed"). `renamed` detection fires when body hash is identical but name differs. Set `include_blast_radius=true` to also return downstream importers (with `max_blast_depth` hop limit). Requires a locally indexed repo (`index_folder`); GitHub-indexed repos return a clear error. Requires `git` on PATH; graceful error if not available. Filters index-storage files (e.g. `.index/`) from the diff when the storage dir is inside the repo. No new dependencies. 12 new tests.
+
 ## [1.11.14] - 2026-03-27
 
 ### Added
