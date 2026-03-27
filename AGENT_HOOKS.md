@@ -22,6 +22,13 @@ This document covers two ways to enforce usage:
   - [2. Edit Guard (`jcodemunch_edit_guard.sh`)](#2-edit-guard-jcodemunch_edit_guardsh)
   - [3. Index Hook (`jcodemunch_index_hook.sh`)](#3-index-hook-jcodemunch_index_hooksh)
   - [Installation & Setup](#installation--setup)
+  - [PowerShell (PS1) Hooks](#powershell-ps1-hooks)
+    - [Shared Module (`JcmHooks.psm1`)](#shared-module-jcmhookspsm1)
+    - [1. Read Guard (`jcodemunch_read_guard.ps1`)](#1-read-guard-jcodemunch_read_guardps1)
+    - [2. Edit Guard (`jcodemunch_edit_guard.ps1`)](#2-edit-guard-jcodemunch_edit_guardps1)
+    - [3. Index Hook (`jcodemunch_index_hook.ps1`)](#3-index-hook-jcodemunch_index_hookps1)
+    - [PowerShell Installation & Setup](#powershell-installation--setup)
+    - [PowerShell Verify](#powershell-verify)
   - [Logging & Debugging](#logging--debugging)
 
 ---
@@ -549,9 +556,467 @@ echo "exit: $?"
 
 ---
 
+## PowerShell (PS1) Hooks
+
+> For Windows users running Claude Code or other MCP clients in PowerShell.
+
+The PowerShell hooks provide the same behavior as the bash scripts — read guard, edit guard, and index hook — but run natively on Windows without requiring WSL or Git Bash. All three scripts share a common module (`JcmHooks.psm1`) that handles JSON parsing, logging, and helper functions.
+
+### Shared Module (`JcmHooks.psm1`)
+
+Save this alongside the hook scripts. It provides `Read-HookInput`, `Write-HookLog`, `Get-CodeFileExtensions`, `Get-SafeCommandPatterns`, and `Find-RepoRoot` — used by all three hooks.
+
+**`~/.claude/hooks/JcmHooks.psm1`:**
+
+```powershell
+$ErrorActionPreference = 'Continue'
+
+function Parse-HookJson {
+    <#
+    .SYNOPSIS
+    Parses hook JSON input string into a PSCustomObject with tool_name and tool_input.
+    Falls back to $env:CLAUDE_TOOL_NAME if tool_name is missing.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$InputJson
+    )
+    try {
+        $d = $InputJson | ConvertFrom-Json
+        $toolName = $d.tool_name
+        if (-not $toolName) {
+            $toolName = $env:CLAUDE_TOOL_NAME
+        }
+        $toolInput = $d.tool_input
+        if (-not $toolInput) {
+            $toolInput = $d.PSObject.Properties | Where-Object { $_.Name -ne 'tool_name' } | ForEach-Object { $_.Value }
+            # tool_input missing — return raw object
+        }
+        return [PSCustomObject]@{
+            tool_name  = if ($toolName) { $toolName } else { '' }
+            tool_input = if ($toolInput) { $toolInput } else { $null }
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
+function Read-HookInput {
+    <#
+    .SYNOPSIS
+    Reads JSON from stdin and returns parsed hook input.
+    #>
+    $json = [Console]::In.ReadToEnd()
+    return Parse-HookJson -InputJson $json
+}
+
+function Write-HookLog {
+    <#
+    .SYNOPSIS
+    Appends a timestamped log line. Only writes when $env:JCODEMUNCH -eq '1'.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$LogPath,
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+    if ($env:JCODEMUNCH_DEBUG -ne '1') { return }
+    $timestamp = Get-Date -Format 'HH:mm:ss'
+    "[$timestamp] $Message" | Out-File -FilePath $LogPath -Append -Encoding utf8
+}
+
+function Get-CodeFileExtensions {
+    <#
+    .SYNOPSIS
+    Returns a regex-escaped alternation string of known code file extensions.
+    #>
+    return 'py|ts|tsx|js|jsx|mjs|go|rs|java|rb|php|cs|cpp|c|h|swift|kt|scala|dart|lua|r|hs|ex|exs|sh|sql'
+}
+
+function Get-SafeCommandPatterns {
+    <#
+    .SYNOPSIS
+    Returns a regex pattern matching commands that should always pass through the read guard.
+    #>
+    return 'npm|yarn|pnpm|cargo|go |pytest|jest|vitest|rspec|mvn|gradle|git |docker|kubectl|uv |pip |brew|jcodemunch|uvx jcodemunch'
+}
+
+function Find-RepoRoot {
+    <#
+    .SYNOPSIS
+    Walks up from a file path to find the nearest repo root directory.
+    Looks for: .git, pyproject.toml, package.json, go.mod, Cargo.toml, pom.xml.
+    Falls back to the file's own parent directory.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$FilePath
+    )
+    $markers = @('.git', 'pyproject.toml', 'package.json', 'go.mod', 'Cargo.toml', 'pom.xml')
+    $resolved = Resolve-Path $FilePath -ErrorAction SilentlyContinue
+    if ($resolved) {
+        $dir = Split-Path -Parent $resolved
+    } else {
+        $dir = Split-Path -Parent $FilePath
+    }
+    if (-not $dir) { return $FilePath }
+
+    while ($dir) {
+        foreach ($marker in $markers) {
+            if (Test-Path (Join-Path $dir $marker)) {
+                return (Resolve-Path $dir).Path
+            }
+        }
+        $parent = Split-Path -Parent $dir
+        if ($parent -eq $dir) { break }
+        $dir = $parent
+    }
+
+    $fallback = Split-Path -Parent $FilePath
+    if ($fallback) {
+        return (Resolve-Path $fallback).Path
+    }
+    return $FilePath
+}
+
+Export-ModuleMember -Function Parse-HookJson, Read-HookInput, Write-HookLog, Get-CodeFileExtensions, Get-SafeCommandPatterns, Find-RepoRoot
+```
+
+### 1. Read Guard (`jcodemunch_read_guard.ps1`)
+
+Fires `PreToolUse`. Intercepts `Bash`, `Grep`, and `Glob` when they look like code exploration. Exit code `2` blocks the tool and sends your message back to Claude as feedback. Builds, tests, and git operations pass through untouched. (Note: `Read` is intentionally not blocked, as Edit/Write tools require a prior Read in session state).
+
+**`~/.claude/hooks/jcodemunch_read_guard.ps1`:**
+
+```powershell
+# .claude/hooks/jcodemunch_read_guard.ps1
+# PreToolUse guard: redirects code-exploration calls to jCodeMunch.
+# Intercepts: Bash (grep/find/cat patterns), Grep, Glob.
+# Read is intentionally NOT blocked — Edit/Write tools require a prior Read in session state.
+# Exit 0 = pass through. Exit 2 = block with feedback.
+
+$ErrorActionPreference = 'Continue'
+Import-Module "$PSScriptRoot/JcmHooks.psm1" -Force
+
+$scriptName = 'read_guard'
+$logPath = Join-Path $PSScriptRoot "jcodemunch_$scriptName.log"
+
+$parsed = Read-HookInput
+if (-not $parsed) { exit 0 }
+
+$toolName = $parsed.tool_name
+Write-HookLog -LogPath $logPath -Message "TOOL=$toolName"
+
+if ($toolName -notin @('Bash', 'Grep', 'Glob')) { exit 0 }
+
+# Extract payload
+$payload = ''
+if ($parsed.tool_input.command) { $payload = $parsed.tool_input.command }
+elseif ($parsed.tool_input.pattern) { $payload = $parsed.tool_input.pattern }
+elseif ($parsed.tool_input.file_path) { $payload = $parsed.tool_input.file_path }
+elseif ($parsed.tool_input.query) { $payload = $parsed.tool_input.query }
+
+Write-HookLog -LogPath $logPath -Message "TOOL=$toolName PAYLOAD=$payload"
+
+$codeExts = Get-CodeFileExtensions
+$safePatterns = Get-SafeCommandPatterns
+$isExploration = $false
+
+if ($toolName -eq 'Bash') {
+    if ($payload -match $safePatterns) { exit 0 }
+    if ($payload -imatch "(grep|rg|find|cat|head|tail)\s+.*\.($codeExts)") { $isExploration = $true }
+}
+elseif ($toolName -eq 'Grep') {
+    $isExploration = $true
+}
+elseif ($toolName -eq 'Glob') {
+    if ($payload -imatch "\*\.($codeExts)") { $isExploration = $true }
+}
+
+if (-not $isExploration) { exit 0 }
+
+# Block
+$message = @"
+jCodeMunch guard - use structured retrieval instead.
+
+  Discovery
+  suggest_queries  -> best first step for an unfamiliar repo
+  get_repo_outline -> high-level overview of the repo
+  get_file_tree    -> browse directory structure
+  get_file_outline -> list all symbols in a file (before reading any source)
+
+  Retrieval
+  search_symbols   -> find a function/class/method by name
+  get_symbol_source -> fetch one symbol (symbol_id) or many (symbol_ids[])
+  get_context_bundle -> symbol + its imports (+ optional callers) in one call
+  get_file_content -> read a specific line range (last resort)
+
+  Search
+  search_text      -> full-text search (strings, comments, TODOs)
+  search_columns   -> search dbt / SQLMesh / database column metadata
+
+  Relationship & Impact
+  find_importers   -> what imports a file
+  find_references  -> where is an identifier used
+  check_references -> quick dead-code check
+  get_dependency_graph -> file-level dependency graph (up to 3 hops)
+  get_blast_radius -> what breaks if this symbol changes
+  get_class_hierarchy  -> full inheritance chain (ancestors + descendants)
+  get_related_symbols  -> symbols related via co-location / shared importers
+  get_symbol_diff  -> diff symbol sets between two indexed repo snapshots
+
+  Utilities
+  get_session_stats -> token savings and cost-avoided breakdown for this session
+
+Not indexed yet? -> index_folder { `"path`": `"/path/to/project`" } first.
+"@
+
+[System.Console]::Error.WriteLine($message)
+Write-HookLog -LogPath $logPath -Message "BLOCKED"
+exit 2
+```
+
+### 2. Edit Guard (`jcodemunch_edit_guard.ps1`)
+
+Fires `PreToolUse`. Intercepts `Edit`, `Write`, and `MultiEdit`. By default, this is a **soft gate** that allows the edit but warns the agent to consult jCodeMunch first. You can enable a hard block to prevent blind edits via `JCODEMUNCH_HARD_BLOCK=1`.
+
+**`~/.claude/hooks/jcodemunch_edit_guard.ps1`:**
+
+```powershell
+# .claude/hooks/jcodemunch_edit_guard.ps1
+# PreToolUse guard: nudges agent to consult jCodeMunch before editing.
+# Intercepts: Edit, Write, MultiEdit.
+# SOFT GATE - prints a warning to stderr but always exits 0 (edit proceeds).
+# Hard-block mode: set JCODEMUNCH_HARD_BLOCK=1 in your environment.
+# Exit 0 = pass through (with optional warning). Exit 2 = block (hard mode only).
+
+$ErrorActionPreference = 'Continue'
+Import-Module "$PSScriptRoot/JcmHooks.psm1" -Force
+
+$scriptName = 'edit_guard'
+$logPath = Join-Path $PSScriptRoot "jcodemunch_$scriptName.log"
+
+$parsed = Read-HookInput
+if (-not $parsed) { exit 0 }
+
+$toolName = $parsed.tool_name
+Write-HookLog -LogPath $logPath -Message "TOOL=$toolName"
+
+if ($toolName -notin @('Edit', 'Write', 'MultiEdit')) { exit 0 }
+
+if ($env:JCODEMUNCH_ALLOW_RAW_WRITE -eq '1') { exit 0 }
+
+$target = ''
+if ($parsed.tool_input.file_path) { $target = $parsed.tool_input.file_path }
+$fileHint = if ($target) { "  Target file: $target" } else { '' }
+
+$hardBlock = $env:JCODEMUNCH_HARD_BLOCK -eq '1'
+
+if ($hardBlock) {
+    $verb = 'blocked'
+    $exitCode = 2
+} else {
+    $verb = 'allowed - but consider consulting jCodeMunch first'
+    $exitCode = 0
+}
+
+$message = @"
+jCodeMunch edit guard - raw file edit $verb.
+$fileHint
+
+Before writing to source files, jCodeMunch read tools give you safer context:
+
+  get_symbol_source            -> confirm you are editing the right implementation
+  get_file_outline             -> see all symbols in the file before touching it
+  get_blast_radius             -> understand what else breaks if you change this
+  find_references              -> find all call sites that may need updating too
+  search_text                  -> locate related strings, comments, or config values
+
+To suppress this warning:  JCODEMUNCH_ALLOW_RAW_WRITE=1
+To hard-block all edits:   JCODEMUNCH_HARD_BLOCK=1
+
+Not indexed yet? -> index_folder { `"path`": `"/path/to/project`" } first.
+"@
+
+[System.Console]::Error.WriteLine($message)
+Write-HookLog -LogPath $logPath -Message "$verb tool=$toolName file=$target"
+exit $exitCode
+```
+
+### 3. Index Hook (`jcodemunch_index_hook.ps1`)
+
+Fires `PostToolUse` for `Edit`, `Write`, and `MultiEdit`. It automatically updates the jCodeMunch index for the modified files so the agent always retrieves fresh code in subsequent steps.
+
+**`~/.claude/hooks/jcodemunch_index_hook.ps1`:**
+
+```powershell
+# .claude/hooks/jcodemunch_index_hook.ps1
+# PostToolUse hook: re-indexes a file in jCodeMunch after it is written.
+# Triggers on: Edit, Write, MultiEdit.
+# Requires: jcodemunch-mcp running and reachable via uvx (or PATH).
+# Exit 0 always - index failures are logged but never block the agent.
+
+$ErrorActionPreference = 'Continue'
+Import-Module "$PSScriptRoot/JcmHooks.psm1" -Force
+
+$scriptName = 'index_hook'
+$logPath = Join-Path $PSScriptRoot "jcodemunch_$scriptName.log"
+
+$parsed = Read-HookInput
+if (-not $parsed) { exit 0 }
+
+$toolName = $parsed.tool_name
+
+if ($toolName -notin @('Edit', 'Write', 'MultiEdit')) { exit 0 }
+
+# Extract file paths
+$paths = @()
+$inp = $parsed.tool_input
+if ($inp.file_path) {
+    $paths += $inp.file_path
+}
+if ($inp.edits) {
+    foreach ($edit in $inp.edits) {
+        if ($edit.file_path) { $paths += $edit.file_path }
+    }
+}
+
+if ($paths.Count -eq 0) {
+    Write-HookLog -LogPath $logPath -Message "SKIP tool=$toolName - no file_path found"
+    exit 0
+}
+
+$anyFailed = $false
+
+foreach ($filePath in $paths) {
+    if (-not (Test-Path $filePath)) {
+        Write-HookLog -LogPath $logPath -Message "SKIP $filePath - file does not exist (deleted?)"
+        continue
+    }
+
+    $repoRoot = Find-RepoRoot -FilePath $filePath
+    Write-HookLog -LogPath $logPath -Message "INDEX tool=$toolName file=$filePath root=$repoRoot"
+
+    try {
+        $proc = Start-Process -FilePath "uvx" -ArgumentList "jcodemunch-mcp", "index_file", "--path", $filePath, "--repo-root", $repoRoot -NoNewWindow -Wait -PassThru -RedirectStandardError "$PSScriptRoot/uvx_stderr.tmp"
+        if ($proc.ExitCode -ne 0) {
+            $errContent = Get-Content "$PSScriptRoot/uvx_stderr.tmp" -Raw -ErrorAction SilentlyContinue
+            Write-HookLog -LogPath $logPath -Message "ERROR indexing $filePath (exit $($proc.ExitCode)): $errContent"
+            $anyFailed = $true
+        } else {
+            Write-HookLog -LogPath $logPath -Message "OK $filePath"
+        }
+        Remove-Item "$PSScriptRoot/uvx_stderr.tmp" -Force -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-HookLog -LogPath $logPath -Message "ERROR indexing ${filePath}: $_"
+        $anyFailed = $true
+    }
+}
+
+if ($anyFailed) {
+    [System.Console]::Error.WriteLine("Warning: jCodeMunch: one or more files could not be re-indexed. Run index_folder manually if retrieval seems stale.")
+}
+
+exit 0
+```
+
+### PowerShell Installation & Setup
+
+#### Step 1 — Save the scripts
+
+Ensure the hooks folder exists:
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude\hooks"
+```
+
+Save the four files into `~/.claude/hooks/`:
+
+| File | Purpose |
+|------|---------|
+| `JcmHooks.psm1` | Shared module (logging, JSON parsing, helpers) |
+| `jcodemunch_read_guard.ps1` | Read guard hook |
+| `jcodemunch_edit_guard.ps1` | Edit guard hook |
+| `jcodemunch_index_hook.ps1` | Index hook |
+
+> On Windows, PowerShell scripts do not need an executable permission bit — they run as-is.
+
+#### Step 2 — Wire it up in settings
+
+Merge into `~/.claude/settings.json`. Use `pwsh` (PowerShell 7+) or `powershell` (Windows PowerShell 5.1) to invoke the hooks:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Grep|Glob",
+        "hooks": [{"type": "command", "command": "CLAUDE_TOOL_NAME={{tool_name}} pwsh -NoProfile ~/.claude/hooks/jcodemunch_read_guard.ps1"}]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": "CLAUDE_TOOL_NAME={{tool_name}} pwsh -NoProfile ~/.claude/hooks/jcodemunch_edit_guard.ps1"}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": "CLAUDE_TOOL_NAME={{tool_name}} pwsh -NoProfile ~/.claude/hooks/jcodemunch_index_hook.ps1"}]
+      }
+    ],
+    "WorktreeCreate": [{
+      "matcher": "",
+      "hooks": [{"type": "command", "command": "jcodemunch-mcp hook-event create"}]
+    }],
+    "WorktreeRemove": [{
+      "matcher": "",
+      "hooks": [{"type": "command", "command": "jcodemunch-mcp hook-event remove"}]
+    }]
+  }
+}
+```
+
+> Replace `pwsh` with `powershell` if you are using Windows PowerShell 5.1 instead of PowerShell 7+.
+> `-NoProfile` skips loading your profile scripts, making hook invocation faster and avoiding side effects.
+
+> [!IMPORTANT]
+> **Reopen Claude Code** after every change to `~/.claude/settings.json`. Hooks are loaded at startup — a running session will not pick up changes until the app is restarted.
+
+#### Step 3 — Unblock script execution (if needed)
+
+If PowerShell's execution policy blocks running local scripts, allow it for your user:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+This permits local scripts while requiring signed scripts downloaded from the internet.
+
+### PowerShell Verify
+
+Simulate the JSON envelope that Claude Code sends and check exit codes:
+
+```powershell
+# Should print redirect message and exit 2
+'{"tool_name":"Grep","tool_input":{"pattern":"TODO"}}' | pwsh -NoProfile ~/.claude/hooks/jcodemunch_read_guard.ps1
+Write-Host "exit: $LASTEXITCODE"
+
+# Should exit 0 — builds are not blocked
+'{"tool_name":"Bash","tool_input":{"command":"npm test"}}' | pwsh -NoProfile ~/.claude/hooks/jcodemunch_read_guard.ps1
+Write-Host "exit: $LASTEXITCODE"
+
+# Should print warning and exit 0 (soft gate)
+'{"tool_name":"Edit","tool_input":{"file_path":"src/app.ts"}}' | pwsh -NoProfile ~/.claude/hooks/jcodemunch_edit_guard.ps1
+Write-Host "exit: $LASTEXITCODE"
+```
+
+---
+
 ## Logging & Debugging
 
-The hooks are silent by default. Enable logging to see exactly what they intercept and why.
+The hooks (both bash and PowerShell) are silent by default. Enable logging to see exactly what they intercept and why.
 
 ### Enable debug logging
 
@@ -577,12 +1042,27 @@ source ~/.zshrc   # or source ~/.bashrc
 # Now reopen Claude Code
 ```
 
+**PowerShell users** — set it in your profile to persist across sessions:
+
+```powershell
+# Add to your $PROFILE (or set it for the current session)
+$env:JCODEMUNCH_DEBUG = '1'
+```
+
+Then **reopen Claude Code** so the new environment variable is inherited by the hook process.
+
 To enable it for a single manual test without touching your profile:
 
 ```bash
 JCODEMUNCH_DEBUG=1 \
   echo '{"tool_name":"Grep","tool_input":{"pattern":"TODO"}}' \
   | ~/.claude/hooks/jcodemunch_read_guard.sh
+```
+
+```powershell
+# PowerShell
+$env:JCODEMUNCH_DEBUG = '1'
+'{"tool_name":"Grep","tool_input":{"pattern":"TODO"}}' | pwsh -NoProfile ~/.claude/hooks/jcodemunch_read_guard.ps1
 ```
 
 ### Read the logs
@@ -593,10 +1073,22 @@ cat ~/.claude/hooks/jcodemunch_read_guard.log
 # [15:04:22] BLOCKED
 ```
 
+```powershell
+# PowerShell
+Get-Content ~/.claude/hooks/jcodemunch_read_guard.log
+# [15:04:22] TOOL=Grep PAYLOAD=TODO
+# [15:04:22] BLOCKED
+```
+
 Live-tail while Claude Code is running:
 
 ```bash
 tail -f ~/.claude/hooks/jcodemunch_*.log
+```
+
+```powershell
+# PowerShell — live tail
+Get-Content ~/.claude/hooks/jcodemunch_*.log -Wait -Tail 20
 ```
 
 ### Log entry reference
@@ -617,6 +1109,13 @@ The log files grow indefinitely. Clear them when they are no longer needed:
 > ~/.claude/hooks/jcodemunch_read_guard.log   # truncate in place
 # or
 rm ~/.claude/hooks/jcodemunch_*.log           # delete entirely
+```
+
+```powershell
+# PowerShell
+Clear-Content ~/.claude/hooks/jcodemunch_read_guard.log   # truncate in place
+# or
+Remove-Item ~/.claude/hooks/jcodemunch_*.log              # delete entirely
 ```
 
 ### Disable logging
