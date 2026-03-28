@@ -881,3 +881,71 @@ class TestTrustedFolders:
         assert any("would normally be rejected as too broad" in w for w in warnings), (
             f"Expected broad bypass warning, got: {warnings}"
         )
+
+
+class TestIndexFolderGitignoreWarning:
+    """index_folder should warn when no root .gitignore exists and file count is large."""
+
+    def test_no_warning_when_gitignore_present(self, tmp_path):
+        """No warning when .gitignore is present, even with many files."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        (repo_dir / ".gitignore").write_text("*.pyc\n")
+        for i in range(600):
+            f = repo_dir / f"file_{i}.py"
+            f.write_text(f"# file {i}\n")
+
+        result = index_folder(str(repo_dir), use_ai_summaries=False, storage_path=str(tmp_path / "store"))
+        assert result.get("success") is not False
+        warnings = result.get("warnings", [])
+        assert not any(".gitignore" in w and "No .gitignore" in w for w in warnings), (
+            f"Unexpected gitignore warning: {warnings}"
+        )
+
+    def test_no_warning_when_file_count_below_threshold(self, tmp_path):
+        """No warning when there are fewer files than the threshold, even without .gitignore."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+
+        repo_dir = tmp_path / "small"
+        repo_dir.mkdir()
+        for i in range(10):
+            (repo_dir / f"file_{i}.py").write_text(f"# file {i}\n")
+
+        result = index_folder(str(repo_dir), use_ai_summaries=False, storage_path=str(tmp_path / "store"))
+        assert result.get("success") is not False
+        warnings = result.get("warnings", [])
+        assert not any("No .gitignore" in w for w in warnings)
+
+    def test_warning_emitted_when_no_gitignore_and_large_index(self, tmp_path):
+        """Warning emitted when no .gitignore and file count >= 500."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+
+        repo_dir = tmp_path / "big"
+        repo_dir.mkdir()
+        for i in range(500):
+            (repo_dir / f"file_{i}.py").write_text(f"# file {i}\n")
+
+        result = index_folder(str(repo_dir), use_ai_summaries=False, storage_path=str(tmp_path / "store"))
+        assert result.get("success") is not False
+        warnings = result.get("warnings", [])
+        assert any("No .gitignore" in w for w in warnings), (
+            f"Expected gitignore warning, got: {warnings}"
+        )
+
+    def test_warning_message_includes_file_count_and_advice(self, tmp_path):
+        """Warning message names the file count and advises adding a .gitignore."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+
+        repo_dir = tmp_path / "advice"
+        repo_dir.mkdir()
+        for i in range(500):
+            (repo_dir / f"file_{i}.py").write_text(f"# file {i}\n")
+
+        result = index_folder(str(repo_dir), use_ai_summaries=False, storage_path=str(tmp_path / "store"))
+        gitignore_warnings = [w for w in result.get("warnings", []) if "No .gitignore" in w]
+        assert gitignore_warnings
+        msg = gitignore_warnings[0]
+        assert "500" in msg or "file" in msg.lower()
+        assert ".gitignore" in msg

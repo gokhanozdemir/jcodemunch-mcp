@@ -82,3 +82,72 @@ def test_get_file_tree_falls_back_to_extension_without_symbol_language(tmp_path)
     files = _flatten_file_nodes(result["tree"])
     assert files["include/no_symbols.h"]["language"] == "cpp"
     assert files["include/no_symbols.h"]["symbol_count"] == 0
+
+
+def _make_index_with_n_files(tmp_path, owner, name, n):
+    """Helper: save an index with n synthetic source files."""
+    store = IndexStore(base_path=str(tmp_path))
+    source_files = [f"src/file_{i}.py" for i in range(n)]
+    raw_files = {f: f"# file {i}\n" for i, f in enumerate(source_files)}
+    store.save_index(
+        owner=owner,
+        name=name,
+        source_files=source_files,
+        symbols=[],
+        raw_files=raw_files,
+        languages={"python": n},
+    )
+    return source_files
+
+
+class TestGetFileTreeTruncation:
+    """get_file_tree must cap output at max_files and surface a helpful hint."""
+
+    def test_no_truncation_when_under_limit(self, tmp_path):
+        _make_index_with_n_files(tmp_path, "trunc", "small", 10)
+        result = get_file_tree("trunc/small", storage_path=str(tmp_path))
+        assert "error" not in result
+        assert result.get("truncated") is None
+        assert result["_meta"]["file_count"] == 10
+
+    def test_truncation_fires_at_max_files(self, tmp_path):
+        _make_index_with_n_files(tmp_path, "trunc", "big", 600)
+        result = get_file_tree("trunc/big", storage_path=str(tmp_path))
+        assert "error" not in result
+        assert result["truncated"] is True
+        assert result["total_file_count"] == 600
+        assert result["_meta"]["file_count"] == 500  # default cap
+
+    def test_truncation_hint_mentions_path_prefix(self, tmp_path):
+        _make_index_with_n_files(tmp_path, "trunc", "hint", 600)
+        result = get_file_tree("trunc/hint", storage_path=str(tmp_path))
+        assert "path_prefix" in result["hint"]
+
+    def test_custom_max_files_respected(self, tmp_path):
+        _make_index_with_n_files(tmp_path, "trunc", "custom", 100)
+        result = get_file_tree("trunc/custom", max_files=50, storage_path=str(tmp_path))
+        assert result["truncated"] is True
+        assert result["_meta"]["file_count"] == 50
+        assert result["total_file_count"] == 100
+
+    def test_max_files_hint_includes_total(self, tmp_path):
+        _make_index_with_n_files(tmp_path, "trunc", "total", 600)
+        result = get_file_tree("trunc/total", storage_path=str(tmp_path))
+        # hint should tell the user they can raise max_files to get everything
+        assert "600" in result["hint"]
+
+    def test_path_prefix_scoping_reduces_below_cap(self, tmp_path):
+        """With a path_prefix that matches few files, no truncation should occur."""
+        store = IndexStore(base_path=str(tmp_path))
+        # 550 files in src/, 10 files in lib/
+        source_files = [f"src/file_{i}.py" for i in range(550)] + [f"lib/util_{i}.py" for i in range(10)]
+        raw_files = {f: "# x\n" for f in source_files}
+        store.save_index(
+            owner="trunc", name="scoped",
+            source_files=source_files, symbols=[],
+            raw_files=raw_files, languages={"python": len(source_files)},
+        )
+        result = get_file_tree("trunc/scoped", path_prefix="lib/", storage_path=str(tmp_path))
+        assert "error" not in result
+        assert result.get("truncated") is None
+        assert result["_meta"]["file_count"] == 10

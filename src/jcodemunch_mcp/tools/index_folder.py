@@ -766,6 +766,22 @@ def index_folder(
         warnings.extend(discover_warnings)
         logger.info("Discovery skip counts: %s", skip_counts)
 
+        # Warn when no root .gitignore is present and the file count is large —
+        # a common cause of bloated indexes that then overflow get_file_tree.
+        _GITIGNORE_WARN_THRESHOLD = 500
+        if (
+            not (folder_path / ".gitignore").exists()
+            and len(source_files) >= _GITIGNORE_WARN_THRESHOLD
+        ):
+            gitignore_warning = (
+                f"No .gitignore found in {folder_path}. "
+                f"{len(source_files)} files were indexed — this may include unintended files "
+                f"(build artifacts, vendored dependencies, etc.). "
+                f"Add a .gitignore and re-run index_folder to exclude them."
+            )
+            logger.warning(gitignore_warning)
+            warnings.append(gitignore_warning)
+
         if not source_files:
             result = {"success": False, "error": "No source files found"}
             if warnings:

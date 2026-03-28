@@ -284,7 +284,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_file_tree",
-            description="Get the file tree of an indexed repository, optionally filtered by path prefix.",
+            description="Get the file tree of an indexed repository, optionally filtered by path prefix. Results are capped at max_files (default 500) to prevent token overflow; use path_prefix to scope large trees.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -301,6 +301,11 @@ async def list_tools() -> list[Tool]:
                         "type": "boolean",
                         "description": "Include file-level summaries in the tree nodes",
                         "default": False
+                    },
+                    "max_files": {
+                        "type": "integer",
+                        "description": "Maximum number of files to return (default 500). When truncated, response includes total_file_count and a hint to use path_prefix.",
+                        "default": 500
                     }
                 },
                 "required": ["repo"]

@@ -4,6 +4,13 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-03-28
+
+### Fixed
+- **`get_file_tree` token overflow on large indexes** (closes #178) — results are now capped at `max_files` (default 500). When truncated, the response includes `truncated: true`, `total_file_count`, and a `hint` suggesting `path_prefix` to scope the query. `max_files` is exposed as a tool parameter so callers can raise it explicitly if needed.
+- **`index_folder` silent over-inclusion** (closes #178) — when no `.gitignore` is present in the repo root and ≥ 500 files are indexed, a warning is now included in the result advising the user to add a `.gitignore` and re-index.
+- 10 new tests (1288 total).
+
 ## [1.12.0] - 2026-03-28
 
 ### Removed
